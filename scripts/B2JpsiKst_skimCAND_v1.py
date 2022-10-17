@@ -4,8 +4,6 @@
 #############################################################################
 import sys, os, pickle, time, re
 from glob import glob
-sys.path.append('../lib')
-sys.path.append('../analysis')
 import itertools
 import json
 from multiprocessing import Pool
@@ -25,13 +23,18 @@ rt.gErrorIgnoreLevel = rt.kError
 rt.RooMsgService.instance().setGlobalKillBelow(rt.RooFit.ERROR)
 import root_numpy as rtnp
 
-from analysis_utilities import drawOnCMSCanvas, getEff, str2bool, check_file, NTUPLE_TAG
-from histo_utilities import create_TH1D, create_TH2D, std_color_list, SetMaxToMaxHist
-from cebefo_style import Set_2D_colz_graphics
-from gridVarQ2Plot import col_dic, plot_gridVarQ2
-from progressBar import ProgressBar
-from categoriesDef import categories
-from Bd2JpsiKst_selection import candidate_selection, category_selection
+try:
+    from analysis_utilities import drawOnCMSCanvas, getEff, str2bool, check_file, NTUPLE_TAG
+    from histo_utilities import create_TH1D, create_TH2D, std_color_list, SetMaxToMaxHist
+    from cebefo_style import Set_2D_colz_graphics
+    from gridVarQ2Plot import col_dic, plot_gridVarQ2
+    from progressBar import ProgressBar
+    from categoriesDef import categories
+    from Bd2JpsiKst_selection import candidate_selection, category_selection
+except ImportError:
+    print >> sys.stderr, "Failed to import analysis_utilities."
+    print >> sys.stderr, "Did you remember to source the env.sh file in the repo?"
+    sys.exit(1)
 
 import argparse
 parser = argparse.ArgumentParser()
@@ -54,8 +57,7 @@ args = parser.parse_args()
 ####                          Datset declaration                         ####
 #############################################################################
 MCloc = '/storage/af/group/rdst_analysis/BPhysics/data/cmsMC/'
-# MCend = '/ntuples_Bd2JpsiKst_%s/out_CAND_*.root' % NTUPLE_TAG
-MCend = '/ntuples_Bd2JpsiKst_220531/out_CAND_*.root'
+MCend = '/ntuples_Bd2JpsiKst_%s/out_CAND_*.root' % NTUPLE_TAG
 RDloc = '/storage/af/group/rdst_analysis/BPhysics/data/cmsRD/ParkingBPH*/'
 
 filesLocMap = {
@@ -427,6 +429,7 @@ def makeSelection(inputs):
                    ev.beamSpot_x, ev.beamSpot_y, ev.beamSpot_z,
                    ev.vtx_PV_x[j], ev.vtx_PV_y[j], ev.vtx_PV_z[j],
                    ev.vtx_B_decay_x[j], ev.vtx_B_decay_y[j], ev.vtx_B_decay_z[j],
+                   ev.PV_chi2[j], ev.PV_ndof[j],
                   )
             if not 'data' in n:
                 aux += (ev.MC_B_pt, ev.MC_B_eta, ev.MC_B_phi,
@@ -603,6 +606,7 @@ def create_dSet(n, filepath, cat, applyCorrections=False, skipCut=[], maxEvents=
                         'beamSpot_x', 'beamSpot_y', 'beamSpot_z',
                         'vtx_PV_x', 'vtx_PV_y', 'vtx_PV_z',
                         'vtx_B_decay_x', 'vtx_B_decay_y', 'vtx_B_decay_z',
+                        'PV_chi2', 'PV_ndof',
                       ]
         if not 'data' in n:
             leafs_names += ['MC_B_pt', 'MC_B_eta', 'MC_B_phi',
