@@ -273,7 +273,7 @@ def extractEventInfos(j, ev, corr=None):
     e.B_pt = p4_vis.Pt() * m_B0/ p4_vis.M()
 
     bestVtx = rt.TVector3(ev.vtx_PV_x[j], ev.vtx_PV_y[j], ev.vtx_PV_z[j])
-    smearedVtx = bestVtx.Copy()
+    smearedVtx = rt.TVector3(bestVtx)
     smearedVtx.SetX(bestVtx.x() + np.random.randn()*B_VTX_STD_X)
     smearedVtx.SetY(bestVtx.y() + np.random.randn()*B_VTX_STD_Y)
     smearedVtx.SetZ(bestVtx.z() + np.random.randn()*B_VTX_STD_Z)
@@ -285,7 +285,7 @@ def extractEventInfos(j, ev, corr=None):
     # Here, for the "down" systematic, we *don't* smear the vertex in one
     # particular direction.
     for attr in ['x','y','z']:
-        vtx = smearedVtx.Copy()
+        vtx = rt.TVector3(smearedVtx)
         if attr == 'x':
             vtx.SetX(bestVtx.x())
         elif attr == 'y':
@@ -312,7 +312,7 @@ def extractEventInfos(j, ev, corr=None):
     #
     # Here, for the "up" systematic, we add additional smearing.
     for attr in ['x','y','z']:
-        vtx = smearedVtx.Copy()
+        vtx = rt.TVector3(smearedVtx)
         if attr == 'x':
             vtx.SetX(vtx.x() + np.random.randn()*B_VTX_STD_X)
         elif attr == 'y':
