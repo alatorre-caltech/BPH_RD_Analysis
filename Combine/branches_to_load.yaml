@@ -1,4 +1,9 @@
 all:
+ - pval_piK
+ - pval_D0pis
+ - sigdxy_vtxD0_PV
+ - PV_chi2
+ - PV_ndof
  - q2
  - Est_mu
  - M2_miss
@@ -62,6 +67,15 @@ all:
  - beamSpot_z
 
 mc:
+ - q2_x
+ - q2_y
+ - q2_z
+ - Est_mu_x
+ - Est_mu_y
+ - Est_mu_z
+ - M2_miss_x
+ - M2_miss_y
+ - M2_miss_z
  - MC_B_pt
  - MC_B_eta
  - MC_mu_pt

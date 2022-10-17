@@ -23,46 +23,44 @@ from os.path import join
 import numpy as np
 import pandas as pd
 
-# try:
-# except ImportError:
-#     print >> sys.stderr, "Failed to import analysis_utilities."
-#     print >> sys.stderr, "Did you remember to source the env.sh file in the repo?"
-#     sys.exit(1)
-sys.path.append('../lib')
-sys.path.append('../analysis')
-from analysis_utilities import getEff, check_file, str2bool, NTUPLE_TAG
-from progressBar import ProgressBar
-from categoriesDef import categories
-from B2DstMu_selection import candidate_selection, trigger_selection
+try:
+    from analysis_utilities import getEff, check_file, str2bool, NTUPLE_TAG
+    from progressBar import ProgressBar
+    from categoriesDef import categories
+    from B2DstMu_selection import candidate_selection, trigger_selection
+except ImportError:
+    print >> sys.stderr, "Failed to import analysis_utilities."
+    print >> sys.stderr, "Did you remember to source the env.sh file in the repo?"
+    sys.exit(1)
 
 import ROOT as rt
 rt.PyConfig.IgnoreCommandLineOptions = True
 rt.gErrorIgnoreLevel = rt.kError
 rt.RooMsgService.instance().setGlobalKillBelow(rt.RooFit.ERROR)
 import root_numpy as rtnp
+import gc
 
-import argparse
+# Standard deviation of the smearing applied to the x, y, and z coordinates of
+# the primary vertex when recomputing the B momentum.
+# Right now, these are essentially set to a random initial guess, but ideally,
+# these would be fairly close to the actual values since Combine will use
+# interpolation and extrapolation to guess at the values of the histogram for
+# different smearings. If the best fit values come close to these it means that
+# Combine doesn't have to interpolate/extrapolate too far.
+B_VTX_STD_X = 0.001
+B_VTX_STD_Y = 0.001
+B_VTX_STD_Z = 0.001
 
-parser = argparse.ArgumentParser()
-parser.add_argument ('--function', type=str, default='main', help='Function to perform')
-parser.add_argument ('-d', '--dataset', type=str, default=[], help='Dataset(s) to run on or regular expression for them', nargs='+')
-parser.add_argument ('--skimTag', type=str, default='', help='Tag to append at the name of the skimmed files directory')
-parser.add_argument ('-p', '--parallelType', choices=['pool', 'jobs', 'serial'], default='jobs', help='Function to perform')
-parser.add_argument ('--maxEvents', type=int, default=1e15, help='Max number of events to be processed')
-parser.add_argument ('-f','--recreate', default=False, action='store_true', help='Recreate even if file already present')
-parser.add_argument ('--applyCorr', default=True, type=str2bool, help='Switch to apply corrections')
-parser.add_argument ('--region', type=str, default='all', choices=['signal', 'trkControl', 'all'], help='Region to skim: signal (0 tracks) or track control (1+)')
-parser.add_argument ('-c','--cat', type=str, default=['high', 'mid', 'low'], choices=['single', 'low', 'mid', 'high', 'none'], help='Category(ies)', nargs='+')
-parser.add_argument ('--skipCut', type=str, default='', choices=['all', '11', '13', '14', '16', '17'], help='Cut to skip.\nAll: skip all the cuts\n16:Visible mass cut\n17: additional tracks cut')
-######## Arguments not for user #####################
-parser.add_argument ('--tmpDir', type=str, default=None, help='Temporary directory')
-parser.add_argument ('--jN', type=int, default=None, help='Job number')
-args = parser.parse_args()
-
-# python B2DstMu_skimCAND_v1.py -d data
-# python B2DstMu_skimCAND_v1.py -d "Bd_MuNuDst\Z"
-# python B2DstMu_skimCAND_v1.py -d "B[us]"
-# python B2DstMu_skimCAND_v1.py -d "Bd_Dst" "Bd_DDs1" "Bd_Tau" "Bd_MuNuDstPi" "B_DstDXX"
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
 
 #############################################################################
 ####                          Datset declaration                         ####
@@ -107,8 +105,6 @@ def getTLVfromField(ev, n, idx, mass):
 class Container(object):
     pass
 
-# hBfieldMapsRatio = None
-# if hBfieldMapsRatio is None:
 fBfield = rt.TFile.Open('/storage/af/group/rdst_analysis/BPhysics/data/calibration/bFieldMap_2Dover3D.root', 'r')
 hBfieldMapsRatio = fBfield.Get('bfieldMap')
 
@@ -124,9 +120,9 @@ def get_bFieldCorr3D(phi, eta, verbose=False):
 def correctPt(pt, eta, phi, corr=None, smear=0):
     if corr is None:
         return pt
-    elif corr=='RD':
+    elif corr == 'RD':
         return pt * get_bFieldCorr3D(phi, eta)
-    elif corr=='MC':
+    elif corr == 'MC':
         return pt * (smear*np.random.randn() + 1.)
 
 def compMass(pt1, pt2, eta1, eta2, phi1, phi2, m1, m2):
@@ -275,6 +271,31 @@ def extractEventInfos(j, ev, corr=None):
     # print 'm_vis: {:.4f} {:.4f}'.format(ev.mass_D0pismu[j], e.m_vis)
 
     e.B_pt = p4_vis.Pt() * m_B0/ p4_vis.M()
+
+    # Calculate B momentum from primary vertex by smearing the primary vertex
+    # in the x, y, and z directions. This is essentially doing the same
+    # calculation as in B2DstMuDecayTreeProducer.cc.
+    for attr in ['x','y','z']:
+        bestVtx = rt.TVector3(ev.vtx_PV_x[j], ev.vtx_PV_y[j], ev.vtx_PV_z[j])
+        if attr == 'x':
+            bestVtx.SetX(bestVtx.x() + np.random.randn()*B_VTX_STD_X)
+        elif attr == 'y':
+            bestVtx.SetY(bestVtx.y() + np.random.randn()*B_VTX_STD_Y)
+        elif attr == 'z':
+            bestVtx.SetZ(bestVtx.z() + np.random.randn()*B_VTX_STD_Z)
+        vtxB = rt.TVector3(ev.vtx_B_decay_x[j], ev.vtx_B_decay_y[j], ev.vtx_B_decay_z[j])
+        flightB = rt.TVector3(vtxB.x() - bestVtx.x(), vtxB.y() - bestVtx.y(), vtxB.z() - bestVtx.z())
+        B_vect = flightB*(e.B_pt/flightB.Perp())
+        p4_B = rt.TLorentzVector()
+        p4_B.SetVectM(B_vect, m_B0)
+
+        setattr(e,'M2_miss_%s' % attr,(p4_B - p4_vis).M2())
+        setattr(e,'U_miss_%s' % attr,(p4_B - p4_vis).E() - (p4_B - p4_vis).P())
+        setattr(e,'q2_%s' % attr,(p4_B - p4_Dst).M2())
+
+        p4st_mu = rt.TLorentzVector(p4_mu)
+        p4st_mu.Boost(-1*p4_B.BoostVector())
+        setattr(e,'Est_mu_%s' % attr,p4st_mu.E())
 
     # Using direction from vertex
     e.B_eta = ev.B_D0pismu_eta[j]
@@ -600,6 +621,9 @@ def makeSelection(inputs):
 
             aux = (ev.runNum, ev.lumiNum, ev.eventNum, ev.LumiBlock,
                    evEx.q2, evEx.Est_mu, evEx.M2_miss, evEx.U_miss,
+                   evEx.q2_x, evEx.Est_mu_x, evEx.M2_miss_x, evEx.U_miss_x,
+                   evEx.q2_y, evEx.Est_mu_y, evEx.M2_miss_y, evEx.U_miss_y,
+                   evEx.q2_z, evEx.Est_mu_z, evEx.M2_miss_z, evEx.U_miss_z,
                    evEx.q2_coll, evEx.Est_mu_coll, evEx.M2_miss_coll,
                    evEx.q2_prefit, evEx.Est_mu_prefit, evEx.M2_miss_prefit,
                    ev.mu_charge[j], evEx.prefit_mu_pt, evEx.mu_pt, evEx.mu_eta, evEx.mu_phi,
@@ -999,7 +1023,7 @@ def makeSelection(inputs):
         print tag, ': done'
     return [output, N_accepted_cand]
 
-def create_dSet(n, filepath, cat, applyCorrections=False, skipCut=[], trkControlRegion=False, maxEvents=1e15):
+def create_dSet(n, filepath, cat, skim_tag, parallel_type, applyCorrections=False, skipCut=[], trkControlRegion=False, max_events=1e15):
     if cat is None:
         catName = 'NoCat'
     else:
@@ -1007,7 +1031,7 @@ def create_dSet(n, filepath, cat, applyCorrections=False, skipCut=[], trkControl
     print '\n' + 50*'-'
     print n, catName
     if 'data' in n:
-        loc = join(root,'cmsRD/skimmed'+args.skimTag+'/B2DstMu'+ n.replace('data', ''))
+        loc = join(root,'cmsRD/skimmed'+skim_tag+'/B2DstMu'+ n.replace('data', ''))
         # out = re.search('2[12][01][0-9][0-3][0-9]', filepath)
         # if out is None:
         #     print filepath
@@ -1024,7 +1048,7 @@ def create_dSet(n, filepath, cat, applyCorrections=False, skipCut=[], trkControl
         fskimmed_name = loc + aux[aux.find(pattern) + len(pattern) : ] + '_' + catName
         N_evts_per_job = 75000
     else:
-        d = join(os.path.dirname(filepath),'skimmed'+args.skimTag+'/')
+        d = join(os.path.dirname(filepath),'skimmed'+skim_tag+'/')
         if not os.path.isdir(d):
             os.makedirs(d)
         fskimmed_name = d + catName
@@ -1087,13 +1111,17 @@ def create_dSet(n, filepath, cat, applyCorrections=False, skipCut=[], trkControl
                 print >> sys.stderr, '[ERROR] Problem with vertexes histograms in %s' % fn
                 raise
         print 'Computing events from {} files'.format(tree.GetNtrees())
-        if tree.GetEntries() > maxEvents:
-            print "Warning: %i total events but maxEvents is %i" % (tree.GetEntries(), maxEvents)
-        N_cand_in = min(maxEvents, tree.GetEntries())
+        if tree.GetEntries() > max_events:
+            print_warning("Warning: %i total events but max_events is %i" % (tree.GetEntries(), max_events))
+            time.sleep(10)
+        N_cand_in = min(max_events, tree.GetEntries())
         print n, ': Total number of candidate events =', N_cand_in
 
         leafs_names = ['runNum', 'lumiNum', 'eventNum', 'lumiBlock',
                        'q2', 'Est_mu', 'M2_miss', 'U_miss',
+                       'q2_x', 'Est_mu_x', 'M2_miss_x', 'U_miss_x',
+                       'q2_y', 'Est_mu_y', 'M2_miss_y', 'U_miss_y',
+                       'q2_z', 'Est_mu_z', 'M2_miss_z', 'U_miss_z',
                        'q2_coll', 'Est_mu_coll', 'M2_miss_coll',
                        'q2_prefit', 'Est_mu_prefit', 'M2_miss_prefit',
                        'mu_charge', 'prefit_mu_pt', 'mu_pt', 'mu_eta', 'mu_phi',
@@ -1242,9 +1270,18 @@ def create_dSet(n, filepath, cat, applyCorrections=False, skipCut=[], trkControl
             if 'data' in n:
                 applyCorr = 'RD'
 
-        if N_cand_in < 1.5*N_evts_per_job or args.parallelType == 'serial':
-            output, N_accepted_cand = makeSelection([n, '', filenames, leafs_names, cat,
+        if parallel_type == 'serial':
+            # Warning: The current Tier2 nodes at Caltech are running Alma
+            # Linux 8, and there is no compiled version of CMSSW 10.2.3 for
+            # this operating system. Therefore, we need to run basically
+            # everything in a singularity container. Right now, this script is
+            # only set up to do that with jobs submitted via condor, so unless
+            # you are running in a VM you shouldn't set parallel_type to serial
+            # or jobs.
+            output, N_accepted_cand = makeSelection([n, '', filenames,
+leafs_names, cat,
                                                      [0, N_cand_in-1], applyCorr, skipCut, trkControlRegion, True])
+            dset = pd.DataFrame(output, columns=leafs_names)
         else:
             pdiv = list(range(0, N_cand_in, N_evts_per_job))
             if not pdiv[-1] == N_cand_in:
@@ -1256,10 +1293,12 @@ def create_dSet(n, filepath, cat, applyCorrections=False, skipCut=[], trkControl
             print ' '
 
             start = time.time()
-            if args.parallelType == 'pool' or len(inputs) < 10:
+            if parallel_type == 'pool':
                 p = Pool(min(15,len(inputs)))
                 outputs = p.map(makeSelection, inputs)
-            elif args.parallelType == 'jobs':
+                output = np.concatenate(tuple([o[0] for o in outputs]))
+                dset = pd.DataFrame(output, columns=leafs_names)
+            elif parallel_type == 'jobs':
                 tmpDir = 'tmp/B2DstMu_skimCAND_%s_%s' % (n,catName)
                 if trkControlRegion:
                     tmpDir += '_trkControl'
@@ -1301,23 +1340,31 @@ def create_dSet(n, filepath, cat, applyCorrections=False, skipCut=[], trkControl
                     proceed = not found
                 print 'All jobs finished'
 
-                outputs = []
                 print 'Fetching jobs output'
                 pb = ProgressBar(len(inputs))
+                N_accepted_cand = []
+                dset = None
                 for ii in range(len(inputs)):
                     pb.show(ii)
                     with open(join(tmpDir,'output_%i.p' % ii), 'rb') as f:
                         o = pickle.load(f)
-                        outputs.append(o)
 
-            print 'Concatenating the outputs'
-            output = np.concatenate(tuple([o[0] for o in outputs]))
-            N_accepted_cand = []
-            for o in outputs: N_accepted_cand += o[1]
+                        N_accepted_cand += o[1]
+
+                        ds = pd.DataFrame(o[0], columns=leafs_names)
+                        for name in leafs_names:
+                            if ds[name].dtype == np.float64:
+                                ds[name] = ds[name].astype(np.float32)
+                        if dset is None:
+                            dset = ds
+                        else:
+                            dset = pd.concat((dset,ds))
+
+                        # Try to free up as much memory as possible
+                        gc.collect()
+
             print 'Total time: {:.1f} min'.format((time.time()-start)/60.)
 
-
-        dset = pd.DataFrame(output, columns=leafs_names)
         if not os.path.isdir(os.path.dirname(fskimmed_name)):
             os.makedirs(os.path.dirname(fskimmed_name))
         rtnp.array2root(dset.to_records(), fskimmed_name, treename='Tevts', mode='RECREATE')
@@ -1348,23 +1395,19 @@ def createSubmissionFile(tmpDir, njobs):
     with open(job_file, 'w') as fjob:
         fjob.write('#!/bin/bash\n')
         fjob.write('source /cvmfs/cms.cern.ch/cmsset_default.sh\n')
-        if os.environ['USER'] == 'ocerri':
-            fjob.write('cd /storage/af/user/ocerri/CMSSW_10_2_3/; eval `scramv1 runtime -sh`\n')
-            fjob.write('cd '+os.path.dirname(os.path.abspath(__file__))+'\n')
-            fjob.write('python B2DstMu_skimCAND_v1.py --function makeSel --tmpDir $1 --jN $2\n')
-        else:
-            fjob.write('cd %s/RDstAnalysis/CMSSW_10_2_3/\n' % os.environ['HOME'])
-            fjob.write('eval `scramv1 runtime -sh`\n')
-            fjob.write('cd %s/RDstAnalysis/BPH_RD_Analysis/\n' % os.environ['HOME'])
-            fjob.write('export PYTHONPATH=%s/RDstAnalysis/BPH_RD_Analysis/lib:$PYTHONPATH\n' % os.environ['HOME'])
-            fjob.write('export PYTHONPATH=%s/RDstAnalysis/BPH_RD_Analysis/analysis:$PYTHONPATH\n' % os.environ['HOME'])
-            fjob.write('python ./scripts/B2DstMu_skimCAND_v1.py --function makeSel --tmpDir $1 --jN $2\n')
-    os.system('chmod +x {}/job.sh'.format(tmpDir))
+        fjob.write('cd %s/RDstAnalysis/CMSSW_10_2_3/\n' % os.environ['HOME'])
+        fjob.write('eval `scramv1 runtime -sh`\n')
+        fjob.write('cd %s/RDstAnalysis/BPH_RD_Analysis/\n' % os.environ['HOME'])
+        fjob.write('export PYTHONPATH=%s/RDstAnalysis/BPH_RD_Analysis/lib:$PYTHONPATH\n' % os.environ['HOME'])
+        fjob.write('export PYTHONPATH=%s/RDstAnalysis/BPH_RD_Analysis/analysis:$PYTHONPATH\n' % os.environ['HOME'])
+        fjob.write('source env.sh\n')
+        fjob.write('python ./scripts/B2DstMu_skimCAND_v1.py --make-sel --tmp-dir $1 -j $2\n')
+    os.system('chmod +x %s/job.sh' % tmpDir)
 
     sub_file = join(tmpDir,'jobs.jdl')
     with open(sub_file, 'w') as fsub:
-        fsub.write('executable    = %s\n' % join(tmpDir,'job.sh'))
-        fsub.write('arguments     = {} $(ProcId)\n'.format(tmpDir))
+        fsub.write('executable    = %s\n' % job_file)
+        fsub.write("arguments     = {} $(ProcId)\n".format(tmpDir))
         fsub.write('output        = {}/out/job_$(ProcId)_$(ClusterId).out\n'.format(tmpDir))
         fsub.write('error         = {}/out/job_$(ProcId)_$(ClusterId).err\n'.format(tmpDir))
         fsub.write('log           = {}/out/job_$(ProcId)_$(ClusterId).log\n'.format(tmpDir))
@@ -1393,59 +1436,91 @@ def createSubmissionFile(tmpDir, njobs):
         fsub.write('queue %i\n' % njobs)
         fsub.close()
 
+def print_warning(msg):
+    print >> sys.stderr, bcolors.FAIL + msg + bcolors.ENDC
+
 if __name__ == "__main__":
-    if args.function == 'main':
-        file_loc = {}
-        nCount = 0
-        for n in args.dataset:
-            for kn in filesLocMap:
-                if re.match(n, kn):
-                    print 'Adding %s' % kn
-                    file_loc[kn] = filesLocMap[kn]
-                    nCount += 1
-        print 'Running over {} datasets'.format(nCount)
+    import argparse
 
-        if len(args.dataset) == 0:
-            print >> sys.stderr, 'No dataset provided, rerun with -d'
-            sys.exit(1)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--make-sel', default=False, action='store_true', help='make selection')
+    parser.add_argument('-d', '--dataset', type=str, default=[], help='Dataset(s) to run on or regular expression for them', nargs='+')
+    parser.add_argument('-s', '--skim-tag', type=str, default='', help='Tag to append at the name of the skimmed files directory')
+    parser.add_argument('-p', '--parallel-type', choices=['pool', 'jobs', 'serial'], default='jobs', help='Function to perform')
+    parser.add_argument('--max-events', type=int, default=1e15, help='Max number of events to be processed')
+    parser.add_argument('-f','--recreate', default=False, action='store_true', help='Recreate even if file already present')
+    parser.add_argument('--apply-corr', default=True, type=str2bool, help='Switch to apply corrections')
+    parser.add_argument('--region', type=str, default='all', choices=['signal', 'trkControl', 'all'], help='Region to skim: signal (0 tracks) or track control (1+)')
+    parser.add_argument('-c', '--cat', type=str, default=['high', 'mid', 'low'], choices=['single', 'low', 'mid', 'high', 'none'], help='Category(ies)', nargs='+')
+    parser.add_argument('--skip-cut', type=str, default='', choices=['all', '11', '13', '14', '16', '17'], help='Cut to skip.\nAll: skip all the cuts\n16:Visible mass cut\n17: additional tracks cut')
+    ######## Arguments not for user #####################
+    parser.add_argument('--tmp-dir', type=str, default=None, help='Temporary directory')
+    parser.add_argument('-j', '--job-number', type=int, default=None, help='Job number')
+    args = parser.parse_args()
 
-        if len(file_loc) == 0:
-            print >> sys.stderr, "No datasets found matching '%s'" % str(args.dataset)
-            sys.exit(1)
+    if sys.version_info[0] > 2:
+        print_warning("Must use Python 2")
+        sys.exit(1)
 
-        recreate = []
-        if args.recreate:
-            recreate = file_loc.keys()
-        print '-'*50 + '\n'
+    if args.parallel_type != 'jobs':
+        warning = \
+"""Warning: The current Tier2 nodes at Caltech are running Alma Linux 8, and
+there is no compiled version of CMSSW 10.2.3 for this operating system.
+Therefore, we need to run basically everything in a singularity container.
+Right now, this script is only set up to do that with jobs submitted via
+condor, so unless you are running in a VM you shouldn't set parallel_type to
+serial or jobs."""
+        print_warning(warning)
+        time.sleep(10)
 
-        skip = []
-        if args.skipCut == 'all':
-            skip.append('all')
-        elif args.skipCut:
-            skip.append([int(args.skipCut)])
-        else:
-            skip.append([])
-
-        trackControlFlag = []
-        if args.region == 'all' or args.region=='signal':
-            trackControlFlag.append(False)
-        if args.region == 'all' or args.region=='trkControl':
-            trackControlFlag.append(True)
-
-        for idx in skip:
-            for cn in args.cat:
-                for iFile, (n, fp) in enumerate(file_loc.iteritems()):
-                    print '>>>> Sample {}/{}'.format(iFile+1, len(file_loc.keys()))
-                    for trkSelectionFlag in trackControlFlag:
-                        create_dSet(n, fp, categories[cn], skipCut=idx, applyCorrections=args.applyCorr, trkControlRegion=trkSelectionFlag, maxEvents=args.maxEvents)
-
-    elif args.function == 'makeSel':
-        tmpDir = args.tmpDir
-        with open(join(tmpDir,'input_%i.p' % args.jN), 'rb') as f:
+    if args.make_sel:
+        with open(join(args.tmp_dir,'input_%i.p' % args.job_number), 'rb') as f:
             input = pickle.load(f)
         output = makeSelection(input)
-        with open(join(tmpDir,'output_%i.p' % args.jN), 'wb') as f:
+        with open(join(args.tmp_dir,'output_%i.p' % args.job_number), 'wb') as f:
             pickle.dump(output, f)
+        sys.exit(0)
 
+    file_loc = {}
+    nCount = 0
+    for n in args.dataset:
+        for kn in filesLocMap:
+            if re.match(n, kn):
+                print 'Adding %s' % kn
+                file_loc[kn] = filesLocMap[kn]
+                nCount += 1
+    print 'Running over {} datasets'.format(nCount)
+
+    if len(args.dataset) == 0:
+        print >> sys.stderr, 'No dataset provided, rerun with -d'
+        sys.exit(1)
+
+    if len(file_loc) == 0:
+        print >> sys.stderr, "No datasets found matching '%s'" % str(args.dataset)
+        sys.exit(1)
+
+    recreate = []
+    if args.recreate:
+        recreate = file_loc.keys()
+    print '-'*50 + '\n'
+
+    skip = []
+    if args.skip_cut == 'all':
+        skip.append('all')
+    elif args.skip_cut:
+        skip.append([int(args.skip_cut)])
     else:
-        print args.function, 'not recognized'
+        skip.append([])
+
+    trackControlFlag = []
+    if args.region == 'all' or args.region=='signal':
+        trackControlFlag.append(False)
+    if args.region == 'all' or args.region=='trkControl':
+        trackControlFlag.append(True)
+
+    for idx in skip:
+        for cn in args.cat:
+            for iFile, (n, fp) in enumerate(file_loc.iteritems()):
+                print '>>>> Sample {}/{}'.format(iFile+1, len(file_loc.keys()))
+                for trkSelectionFlag in trackControlFlag:
+                    create_dSet(n, fp, categories[cn], args.skim_tag, args.parallel_type, skipCut=idx, applyCorrections=args.apply_corr, trkControlRegion=trkSelectionFlag, max_events=args.max_events)

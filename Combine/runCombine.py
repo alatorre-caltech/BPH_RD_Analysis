@@ -1,55 +1,383 @@
 #!/usr/bin/env python
-
 """
-######### Notes #########
-To activate the environment run: cd ~/work/CMSSW_10_2_13/src/; cmsenv; cd ~/BPH_RD_Analysis/Combine/
+Script to run combine to fit R(D*).
 
-To run more categories at once:
-for cat in low mid high comb; do ./runCombine.py --cat $cat --submit; done
+To activate the environment run:
+
+    $ cd ~/RDstAnalysis/CMSSW_10_2_13/src/
+    $ cmsenv
+    $ cd ~/RDstAnalysis/BPH_RD_Analysis/Combine/
+
+To run multiple categories via condor at once:
+
+    $ for cat in low mid high comb; do ./runCombine.py -v [version] --cat $cat --submit; done
 """
-
-
 import sys, os, pickle, time, json, yaml, itertools, commands, re
 from datetime import datetime
 from glob import glob
-sys.path.append('../lib')
-sys.path.append('../analysis')
 from collections import defaultdict
 from multiprocessing import Pool
 from prettytable import PrettyTable
 import numpy as np
 import pandas as pd
 from scipy.stats import chi2 as scipy_chi2
-from scipy.stats import crystalball
 import matplotlib.pyplot as plt
 from array import array
 import subprocess, psutil
-import uproot as ur
 import ROOT as rt
 rt.PyConfig.IgnoreCommandLineOptions = True
 rt.gErrorIgnoreLevel = rt.kError
 rt.RooMsgService.instance().setGlobalKillBelow(rt.RooFit.ERROR)
 import root_numpy as rtnp
+import collections
+from os.path import join, dirname
 
-from system_utilities import print_memory_usage
-this_process = psutil.Process(os.getpid())
+try:
+    from categoriesDef import categories as categoriesDef
+    from analysis_utilities import drawOnCMSCanvas, getEff, DSetLoader, str2bool, load_data, NTUPLE_TAG, load_yaml
+    from beamSpot_calibration import getBeamSpotCorrectionWeights
+    from pT_calibration_reader import pTCalReader as kinCalReader
+    from histo_utilities import create_TH1D, create_TH2D, std_color_list, make_ratio_plot
+    from gridVarQ2Plot import plot_gridVarQ2, plot_SingleCategory, getControlXtitle, getControlSideText
+    from lumi_utilities import getLumiByTrigger
+    from combine_utilities import getUncertaintyFromLimitTree, dumpDiffNuisances, stringJubCustomizationCaltechT2, loadHisto4CombineFromRoot, getResultsFromMultiDimFitSingles
+except ImportError:
+    print "Failed to import analysis_utilities."
+    print "Did you remember to source the env.sh file in the repo?"
+    print >> sys.stderr, "Failed to import analysis_utilities."
+    print >> sys.stderr, "Did you remember to source the env.sh file in the repo?"
+    sys.exit(1)
 
 from progressBar import ProgressBar
-from categoriesDef import categories as categoriesDef
-from analysis_utilities import drawOnCMSCanvas, getEff, DSetLoader, str2bool, load_data, NTUPLE_TAG
-from beamSpot_calibration import getBeamSpotCorrectionWeights
-from pT_calibration_reader import pTCalReader as kinCalReader
-from histo_utilities import create_TH1D, create_TH2D, std_color_list, make_ratio_plot
-from gridVarQ2Plot import plot_gridVarQ2, plot_SingleCategory, getControlXtitle, getControlSideText
-from lumi_utilities import getLumiByTrigger
-from combine_utilities import getUncertaintyFromLimitTree, dumpDiffNuisances, stringJubCustomizationCaltechT2, loadHisto4CombineFromRoot, getResultsFromMultiDimFitSingles
-
 
 import CMS_lumi, tdrstyle
 tdrstyle.setTDRStyle()
 CMS_lumi.writeExtraText = 1
 CMS_lumi.extraText = "     Preliminary"
 donotdelete = []
+
+# The tuples have the following columns:
+#     0. procId (set in B2DstMu_skimCAND_v1.py)
+#     1. central value (relative to Monte Carlo cards)
+#     2. relative uncertainty
+#     3. multiplication factor for relative uncertainty
+uncertainties_DstPi_mix = np.genfromtxt('uncertainties_DstPi_processes.txt', dtype=None)
+uncertainties_DstPiPi_mix = np.genfromtxt('uncertainties_DstPiPi_processes.txt', dtype=None)
+uncertainties_DstHc_mix = np.genfromtxt('uncertainties_DstHc_processes.txt', dtype=None)
+DstHc_sample_id = {'Bd_DstDu':1, 'Bd_DstDd':2, 'Bd_DstDs': 3, 'Bu_DstDu':4, 'Bu_DstDd':5, 'Bs_DstDs':6}
+
+categoriesToCombine = ['low', 'mid', 'high']
+
+binning = {'q2': array('d', [0, 3.5, 6, 9.4, 12])}
+
+SM_RDst = 0.295
+expectedLumi = {'Low':6.4, 'Mid':20.7, 'High':26.4, 'Single':20.7} #fb^-1
+
+FreeParFF = {
+   'CLN': ['R0', 'eig1', 'eig2', 'eig3'],
+   'BLPR': ['eig1', 'eig2', 'eig3', 'eig4', 'eig5', 'eig6'],
+   'NoFF': []
+}
+
+processOrder = [
+    'tau', 'mu',
+    'Bu_MuDstPi', 'Bd_MuDstPi',
+    'Bd_MuDstPiPi', 'Bu_MuDstPiPi',
+    'Bu_TauDstPi', 'Bd_TauDstPi',
+    'Bd_TauDstPiPi', 'Bu_TauDstPiPi',
+    'Bs_MuDstK', 'Bs_TauDstK',
+    'Bd_DstDu', 'Bu_DstDu',
+    'Bd_DstDd', 'Bu_DstDd',
+    'Bd_DstDs', 'Bs_DstDs',
+    'Bd_DDs1', 'Bu_DDs1',
+    #'B_DstDXX',
+    'dataSS_DstMu'
+]
+
+samples_Bd = [p  for p in processOrder if (p[:2] == 'Bd' or p in ['tau', 'mu'])]
+samples_Bu = [p  for p in processOrder if p[:2] == 'Bu']
+samples_Bs = [p  for p in processOrder if p[:2] == 'Bs']
+
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+def print_warning(msg):
+    print >> sys.stderr, bcolors.FAIL + msg + bcolors.ENDC
+
+controlRegSel = {}
+def selfun__TkPlus(ds):
+    sel = ds['ctrl2'] == 1
+    return sel
+controlRegSel['p_'] = selfun__TkPlus
+
+def selfun__TkMinus(ds):
+    sel = ds['ctrl2'] == 2
+    return sel
+controlRegSel['m_'] = selfun__TkMinus
+
+def selfun__TkPlusMinus(ds):
+    sel = (ds['ctrl2'] == 12) | (ds['ctrl2'] == 21)
+    sel = np.logical_and(ds['massVisTks'] < 5.55, sel)
+    return sel
+controlRegSel['pm'] = selfun__TkPlusMinus
+
+def selfun__TkMinusMinus(ds):
+    sel = ds['ctrl2'] == 22
+    sel = np.logical_and(ds['massVisTks'] < 5.3, sel)
+    return sel
+controlRegSel['mm'] = selfun__TkMinusMinus
+
+def selfun__TkPlusPlus(ds):
+    sel = ds['ctrl2'] == 11
+    sel = np.logical_and(ds['massVisTks'] < 5.3, sel)
+    return sel
+controlRegSel['pp'] = selfun__TkPlusPlus
+
+# Check for the right singularity using:
+#
+#     $ ll /cvmfs/singularity.opensciencegrid.org/cmssw/
+basedir = dirname(dirname(os.path.abspath(__file__)))
+
+CONDOR_TEMPLATE = \
+"""
+executable        = {basedir}/Combine/condorJob.sh
+environment       = {environment}
+arguments         = {arguments}
+output            = {outdir}/job_{jN}_$(ClusterId).out
+error             = {outdir}/job_{jN}_$(ClusterId).err
+log               = {outdir}/job_{jN}_$(ClusterId).log
+JobPrio           = -1
+WHEN_TO_TRANSFER_OUTPUT = ON_EXIT_OR_EVICT
++MaxRuntime       = 1200
++JobQueue         = {jobqueue}
++RunAsOwner       = True
++InteractiveUser  = True
++SingularityImage = "/cvmfs/singularity.opensciencegrid.org/cmssw/cms:rhel7"
++SingularityBindCVMFS = True
+run_as_owner      = True
+RequestDisk       = 15000000
+RequestMemory     = {mem}
+RequestCpus       = {cpus}
+x509userproxy     = $ENV(X509_USER_PROXY)
+on_exit_remove    = (ExitBySignal == False) && (ExitCode == 0)
+on_exit_hold      = (ExitBySignal == True) || (ExitCode != 0)
++PeriodicRemove   = ((JobStatus =?= 2) && ((MemoryUsage =!= UNDEFINED && MemoryUsage > 5*RequestMemory)))
+requirements      = Machine =!= LastRemoteHost
+universe          = vanilla
+queue 1
+"""
+
+def update(d, u):
+    # From https://stackoverflow.com/questions/3232943/update-value-of-a-nested-dictionary-of-varying-depth
+    for k, v in u.iteritems():
+        if isinstance(v, collections.Mapping):
+            d[k] = update(d.get(k, {}), v)
+        else:
+            d[k] = v
+    return d
+
+PV_QUANTITIES = ['q2','Est_mu','M2_miss']
+
+def histogram_ctrl(ds, name, bins, weightsCentral, wVar, sel, ctrlVar, ctrlVar_mod, scale):
+    """
+    Returns a dictionary containing all the control region histograms needed
+    for the fit.
+
+    Arguments:
+        - ds: pandas dataframe
+            Dataframe containing the event info.
+        - name: str
+            Name of the process.
+        - bins: dict
+            Dictionary describing the binning in various observables.
+        - weightsCentral: np.array
+            central weights
+        - wVar: dict
+            Dictionary of weights.
+        - sel: dict
+            Dictionary of arrays to select each region.
+        - ctrlVar: dict
+        - ctrlVar_mod: dict
+        - scale: dict
+            dictionary of scale factors for each region
+    """
+    # Add systematic uncertainty terms for PV_x, PV_y, and PV_z. These don't
+    # have any special weight, but we instead use q2, Est_mu, and M2_miss with
+    # the shifted primary vertex when histogramming the data
+    wVar_new = {k: v for k, v in wVar.iteritems()}
+    for attr in ['x','y','z']:
+        for wVar in ['Up','Down']:
+            wVar_new['PV_%s%s' % (attr,wVar)] = np.ones_like(weightsCentral)
+
+    histo = {}
+    for name_wVar, v_wVar in wVar_new.iteritems():
+        h_name = name
+        if name_wVar != '':
+            h_name += '__' + name_wVar
+        w = weightsCentral*v_wVar
+
+        for k, var in ctrlVar.iteritems():
+            if k not in histo:
+                histo[k] = {}
+
+            region = k[5:7]
+
+            if name_wVar.startswith('PV_') and var in PV_QUANTITIES:
+                var += name_wVar[2:4]
+
+            auxSel = sel[region]
+            if ctrlVar_mod[k] is not None:
+                m, j = ctrlVar_mod[k]
+                if m > 1:
+                    auxSel = np.logical_and(np.mod(ds['index'], m) == j, auxSel)
+
+            histo[k][h_name] = create_TH1D(ds[var][auxSel], name=h_name, title=h_name, binning=bins[k], opt='', weights=w[auxSel], scale_histo=scale[region])
+
+    return histo
+
+def histogram(ds, name, bins, bins_2D, weightsCentral, wVar, observables_q2bins, observables_q2integrated, nTotExp, nTotSelected):
+    """
+    Returns a dictionary containing all the signal region histograms needed for
+    the fit.
+
+    Arguments:
+        - ds: pandas dataframe
+            Dataframe containing the event info.
+        - name: str
+            Name of the process.
+        - bins: dict
+            Dictionary describing the binning in various observables.
+        - bins_2D: list
+            List of bins for the 2D histogram.
+        - wVar: dict
+            Dictionary of weights.
+        - observable_q2bins: ?
+        - nTotExp: float
+            Total number of expected events
+        - nTotSelected: float
+            Total number of selected events?
+    """
+    # Add systematic uncertainty terms for PV_x, PV_y, and PV_z. These don't
+    # have any special weight, but we instead use q2, Est_mu, and M2_miss with
+    # the shifted primary vertex when histogramming the data
+    wVar_new = {k: v for k, v in wVar.iteritems()}
+    for attr in ['x','y','z']:
+        for wVar in ['Up','Down']:
+            wVar_new['PV_%s%s' % (attr,wVar)] = np.ones_like(weightsCentral)
+
+    histo = {}
+    # Variables in the whole spectrum
+    for var in observables_q2integrated:
+        if var not in histo:
+            histo[var] = {}
+        for name_wVar, v_wVar in wVar_new.iteritems():
+            if name_wVar:
+                h_name = '%s__%s' % (name,name_wVar)
+            else:
+                h_name = name
+            # Compute the overall weights. The weights stored in wVar are of
+            # the form weights/central weights to make it easier to combine
+            # multiple weights by multiplication.
+            w = weightsCentral*v_wVar
+            scale = nTotExp/nTotSelected
+            if var == 'specQ2':
+                varName = 'q2'
+            else:
+                varName = var
+
+            if name_wVar.startswith('PV_') and var in PV_QUANTITIES:
+                varName += name_wVar[2:4]
+
+            histo[var][h_name] = create_TH1D(ds[varName], name=h_name, weights=w, scale_histo=scale, binning=bins[var], opt='underflow,overflow')
+
+    # Variables to be broken in q2 bins
+    for i_q2, (q2_l, q2_h) in enumerate(zip(bins['q2'][:-1],bins['q2'][1:])):
+        sel_q2 = (ds['q2'] > q2_l) & (ds['q2'] <= q2_h)
+        name2D = 'h2D_q2bin%i' % i_q2
+        if not name2D in histo:
+            histo[name2D] = {}
+        for var in observables_q2bins:
+            cat_name = '%s_q2bin%i' % (var,i_q2)
+
+            if cat_name not in histo:
+                histo[cat_name] = {}
+
+            for name_wVar, v_wVar in wVar_new.iteritems():
+                h_name = name
+                if name_wVar != '':
+                    h_name += '__%s' % name_wVar
+                w = weightsCentral*v_wVar
+                scale = nTotExp/nTotSelected
+
+                varName = var
+                if name_wVar.startswith('PV_') and var in PV_QUANTITIES:
+                    varName += name_wVar[2:4] 
+                    q2 = 'q2%s' % name_wVar[2:4]
+                else:
+                    q2 = 'q2'
+
+                # FIXME: this is inefficient
+                sel_q2 = (ds[q2] > q2_l) & (ds[q2] <= q2_h)
+
+                histo[cat_name][h_name] = create_TH1D(ds[varName][sel_q2], name=h_name, title=h_name, binning=bins[var][i_q2], opt='underflow,overflow', weights=w[sel_q2], scale_histo=scale)
+                if var == 'M2_miss':
+                    if name_wVar.startswith('PV_'):
+                        auxS = np.column_stack((ds['M2_miss%s' % name_wVar[2:4]][sel_q2], ds['Est_mu%s' % name_wVar[2:4]][sel_q2]))
+                    else:
+                        auxS = np.column_stack((ds['M2_miss'][sel_q2], ds['Est_mu'][sel_q2]))
+                    histo[name2D][h_name] = create_TH2D(auxS, name=h_name, title=h_name, binning=bins_2D[i_q2], weights=w[sel_q2], scale_histo=scale)
+
+    return histo
+
+def unroll(histo, bins):
+    # Do the unrolling
+    print '\n\n########### Unrolling 2D histograms ###########'
+    unrolledBins = []
+    unrollingCutOff = 3
+    for i_q2 in range(len(bins['q2'])-1):
+        unrolledBins.append([])
+        name2D = 'h2D_q2bin%i' % i_q2
+        hSum = None
+        nDroppedBins = 0
+        nExpectedDroppedEvents = 0
+        for key, hN in histo[name2D].iteritems():
+            if '__' in key:
+                continue
+            if hSum is None:
+                hSum = hN.Clone('hSum_%i' % i_q2)
+            else:
+                scale = SM_RDst if 'tau' in key else 1.
+                hSum.Add(hN, scale)
+        for ix in range(1, hSum.GetNbinsX()+1):
+            for iy in range(1, hSum.GetNbinsY()+1):
+                if hSum.GetBinContent(ix, iy) > unrollingCutOff:
+                    unrolledBins[i_q2].append([ix, iy])
+                else:
+                    nDroppedBins += 1
+                    nExpectedDroppedEvents += hSum.GetBinContent(ix, iy)
+
+        print 'Dropped bins:', nDroppedBins
+        print 'Expected dropped candidates:', nExpectedDroppedEvents
+
+        nameU = 'Unrolled_q2bin%i' % i_q2
+        histo[nameU] = {}
+        validBins = unrolledBins[i_q2]
+        for n, h in histo[name2D].iteritems():
+            hUnrolled = rt.TH1D(h.GetName(), h.GetTitle(), len(validBins), 0.5, len(validBins)+0.5)
+            for i, (ix, iy) in enumerate(validBins):
+                hUnrolled.SetBinContent(i+1, h.GetBinContent(ix, iy))
+                hUnrolled.SetBinError(i+1, h.GetBinError(ix, iy))
+            histo[nameU][n] = hUnrolled
+
+    return histo, unrolledBins
 
 def get_ctrl_group(ds):
     """
@@ -136,241 +464,54 @@ def get_ctrl_weights(ds,pt_min=0,pt_max=1,fraction=0.3,epsilon=1e-10):
     up = np.select(condlist,[1,1-fraction,1,fraction,0])
     return w, up/w, down/w
 
-# The tuple have: 1) procId (set in B2DstMu_skimCAND_v1.py), 2) central value (relative to Monte Carlo cards), 3) relative uncertainty, 4) multiplication factor for relative uncertainty
-uncertainties_DstPi_mix = np.genfromtxt('uncertainties_DstPi_processes.txt', dtype=None)
-uncertainties_DstPiPi_mix = np.genfromtxt('uncertainties_DstPiPi_processes.txt', dtype=None)
-uncertainties_DstHc_mix = np.genfromtxt('uncertainties_DstHc_processes.txt', dtype=None)
-DstHc_sample_id = {'Bd_DstDu':1, 'Bd_DstDd':2, 'Bd_DstDs': 3, 'Bu_DstDu':4, 'Bu_DstDd':5, 'Bs_DstDs':6}
-
-import argparse
-parser = argparse.ArgumentParser(description='Script used to run combine on the R(D*) analysis.',
-                                 epilog='Test example: ./runCombine.py -c low',
-                                 add_help=True
-                                 )
-parser.add_argument ('--cardTag', '-v', default='test_', help='Card name initial tag.')
-parser.add_argument ('--category', '-c', type=str, default='high', choices=['single', 'low', 'mid', 'high', 'comb'], help='Category.')
-
-parser.add_argument ('--skimmedTagMC', default='_no_pval_sel_v2', type=str, help='Tag to append to the skimmed directory.')
-parser.add_argument ('--skimmedTagRD', default='_no_pval_sel_v2', type=str, help='Tag to append to the skimmed directory.')
-parser.add_argument ('--bareMC', default=False, type=str2bool, nargs='?', const=True, help='Use bare MC instead of the corrected one.')
-parser.add_argument ('--maxEventsToLoad', default=None, type=int, help='Max number of MC events to load per sample.')
-parser.add_argument ('--calBpT', default='none', choices=['poly', 'none'], help='Form factor scheme to use.')
-parser.add_argument ('--schemeFF', default='CLN', choices=['CLN', 'BLPR', 'NoFF'], help='Form factor scheme to use.')
-parser.add_argument ('--lumiMult', default=1., type=float, help='Luminosity multiplier for asimov dataset. Only works when asimov=True')
-parser.add_argument ('--beamSpotCalibration', default=False, type=str2bool, nargs='?', const=True, help='Apply beam spot calibration.')
-
-parser.add_argument ('--useMVA', default=False, choices=[False, 'v3'], help='Use MVA in the fit.')
-parser.add_argument ('--Breco', default='vtx', type=str, choices=['vtx', 'coll', 'prefit'], help='Select reconstruction mode for B.')
-parser.add_argument ('--signalRegProj1D', default='', choices=['M2_miss', 'Est_mu', 'U_miss'], help='Use 1D projections in signal region instead of the unrolled histograms')
-parser.add_argument ('--unblinded', default=False, type=str2bool, nargs='?', const=True, help='Unblind the fit regions.')
-parser.add_argument ('--noLowq2', default=False, action='store_true', help='Mask the low q2 signal regions.')
-parser.add_argument ('--controlRegions', default=['p__mHad', 'm__mHad', 'pp_mHad', 'mm_mHad', 'pm_M2miss', 'pm_q2'], help='Control regions to use', nargs='*')
-parser.add_argument ('--cutMuPS', default=False, type=str2bool, nargs='?', const=True, help='Restrict phase space. See data loading for more info.')
-
-parser.add_argument ('--correlate_tkPVfrac', default=False, action='store_true', help='Correlate tkPVfrac in all categories.')
-parser.add_argument ('--freezeFF', default=False, action='store_true', help='Freeze form factors to central value.')
-parser.add_argument ('--freeMuBr', default=True, help='Make muon branching fraction with a rate parameter (flat prior).')
-parser.add_argument ('--asimov', default=False, action='store_true', help='Use Asimov dataset insted of real data.')
-parser.add_argument ('--noMCstats', default=False, action='store_true', help='Do not include MC stat systematic.')
-
-parser.add_argument ('--dumpWeightsTree', default=False, action='store_true', help='Dump tree with weights for skimmed events.')
-
-availableSteps = ['clean', 'histos', 'preFitPlots', 'shapeVarPlots',
-                  'card', 'workspace',
-                  'bias', 'scan', 'catComp',
-                  'fitDiag', 'postFitPlots',
-                  'uncBreakdownScan', 'uncBreakdownTable',
-                  'externalize',
-                  'impacts', 'GoF']
-defaultPipelineSingle = ['histos', 'preFitPlots', 'card', 'workspace', 'scan', 'GoF']#, 'fitDiag', 'postFitPlots']
-defaultPipelineComb = ['preFitPlots', 'card', 'workspace', 'scan', 'catComp', 'uncBreakdownTable', 'GoF', 'fitDiag', 'postFitPlots', 'uncBreakdownScan']
-# histos preFitPlots shapeVarPlots card workspace scan fitDiag postFitPlots uncBreakdownScan GoF
-parser.add_argument ('--step', '-s', type=str, default=[], choices=availableSteps, help='Analysis steps to run.', nargs='+')
-parser.add_argument ('--submit', default=False, action='store_true', help='Submit a job instead of running the call interactively.')
-parser.add_argument ('--runInJob', default=False, action='store_true', help='Not for user, reserved to jobs calls.')
-
-parser.add_argument ('--validateCard', default=False, action='store_true', help='Run combine card validation.')
-parser.add_argument ('--decorrelateFFpars', default=False, action='store_true', help='Decorrelte form factors parameters')
-
-parser.add_argument ('--forceRDst', default=False, action='store_true', help='Perform fit fixing R(D*) to 0.295')
-parser.add_argument ('--seed', default=6741, type=int, help='Seed used by Combine')
-parser.add_argument ('--RDstLims', default=[], type=float, help='Initial boundaries for R(D*).', nargs='+')
-
-# Shape variations options
-parser.add_argument ('--shapeVarRegions', default=[], type=str, help='Regions (or regular expression) to be plotted in shape variations.', nargs='*')
-
-# Bias options
-parser.add_argument ('--runBiasToys', default=False, action='store_true', help='Only generate toys and run scans for bias, do not collect results.')
-parser.add_argument ('--nToys', default=10, type=int, help='Number of toys to run')
-parser.add_argument ('--toysRDst', default=0.295, type=float, help='R(D*) value used to generate the toys.')
-parser.add_argument ('--runBiasAnalysis', default=False, action='store_true', help='Only analyze bias scans which have been previously produced.')
-
-# Scan options
-parser.add_argument ('--scanStrategy', default=1, type=int, help='Minimizer strategy for the scan.')
-parser.add_argument ('--maskScan', type=str, default=[], nargs='+', help='Channels to mask during likelyhood scan. If this list is non empty, the full card is used (default is fitregionsOnly).')
-parser.add_argument ('--scanTag', type=str, default='')
-parser.add_argument ('--freezeParsScan', type=str, default=[], nargs='+')
-
-# Externalization options
-parser.add_argument ('--externPars', default=['B2DstCLNeig1', 'B2DstCLNeig2', 'B2DstCLNeig3'], type=str, help='Parameters to externalize.', nargs='+')
-parser.add_argument ('--externSigma', default=1., type=float, help='Externalization sigmas.')
-parser.add_argument ('--externTag', default='FF', type=str, help='Externalization tag.')
-parser.add_argument ('--externCenter', default='postFit', type=str, choices=['preFit', 'postFit'], help='Externalization tag.')
-
-# Impacts options
-parser.add_argument ('--collectImpacts', default=False, action='store_true', help='Only collect impact fits which have been previously run')
-parser.add_argument ('--subOnlyImpacts', default=False, action='store_true', help='Only submit impact fits, do not collect results')
-
-# Goodness Of Fit options
-parser.add_argument ('--algoGoF', type=str, default=['Sat'], choices=['Sat', 'AD', 'KS'], help='Algorithm to be used for the goodness of fit test', nargs='+')
-parser.add_argument ('--maskEvalGoF', type=str, default=[], nargs='+', help='Additional channels to mask during GoF evaluation')
-parser.add_argument ('--tagGoF', type=str, default='all')
-
-parser.add_argument ('--showPlots', default=False, action='store_true', help='Show plots by setting ROOT batch mode OFF (default ON)')
-parser.add_argument ('--showCard', default=False, action='store_true', help='Dump card on std outoput')
-parser.add_argument ('--verbose', default=0, type=int, help='Run verbosity.')
-parser.add_argument ('--skip-blop', default=True, action='store_true', help='Skip BLOP form factor weights')
-
-args = parser.parse_args()
-
-if not args.cardTag.endswith('_'):
-    args.cardTag += '_'
-
-if len(args.step) == 0:
-    if args.category == 'comb':
-        args.step = defaultPipelineComb
-    else: args.step = defaultPipelineSingle
-
-    if args.cardTag == 'test_' and (not args.submit) and (not args.runInJob):
-        args.step = ['clean'] + args.step
-
-    if not args.unblinded:
-        for s in args.step:
-            if 'uncBreakdown' in s:
-                args.step.remove(s)
-
-    # if args.runInJob and not args.category == 'comb':
-    #     args.step.append('shapeVarPlots')
-    print 'Running default steps: ' + ', '.join(args.step)
-
-schemeFF = args.schemeFF
-if not args.showPlots:
-    rt.gROOT.SetBatch(True)
-    plt.ioff()
-    plt.switch_backend('Agg')
-
-if len(args.RDstLims) > 2:
-    raise
-elif len(args.RDstLims) == 2:
-    if args.RDstLims[1] <= args.RDstLims[0]:
-        raise
-
-########################### ---- Define standards ----------- ########################
-categoriesToCombine = ['low', 'mid', 'high']
-
-binning = {'q2': array('d', [0, 3.5, 6, 9.4, 12])}
-
-SM_RDst = 0.295
-expectedLumi = {'Low':6.4, 'Mid':20.7, 'High':26.4, 'Single':20.7} #fb^-1
-if args.lumiMult != 1.:
-    print 'Multipling the expected luminosity by {:.1f}'.format(args.lumiMult)
-    for n in expectedLumi.keys():
-        expectedLumi[n] *= args.lumiMult
-    print expectedLumi
-
-FreeParFF = {
-   'CLN': ['R0', 'eig1', 'eig2', 'eig3'],
-   'BLPR': ['eig1', 'eig2', 'eig3', 'eig4', 'eig5', 'eig6'],
-   'NoFF': []
-}[schemeFF]
-
-processOrder = [
-    'tau', 'mu',
-    'Bu_MuDstPi', 'Bd_MuDstPi',
-    'Bd_MuDstPiPi', 'Bu_MuDstPiPi',
-    'Bu_TauDstPi', 'Bd_TauDstPi',
-    'Bd_TauDstPiPi', 'Bu_TauDstPiPi',
-    'Bs_MuDstK', 'Bs_TauDstK',
-    'Bd_DstDu', 'Bu_DstDu',
-    'Bd_DstDd', 'Bu_DstDd',
-    'Bd_DstDs', 'Bs_DstDs',
-    'Bd_DDs1', 'Bu_DDs1',
-    'B_DstDXX',
-    'dataSS_DstMu'
-]
-
-
-samples_Bd = [p  for p in processOrder if (p[:2] == 'Bd' or p in ['tau', 'mu'])]
-samples_Bu = [p  for p in processOrder if p[:2] == 'Bu']
-samples_Bs = [p  for p in processOrder if p[:2] == 'Bs']
-
-
-########################### --------------------------------- #########################
-if args.asimov:
-    CMS_lumi.extraText = "     Simulation Preliminary"
-
-def createCardName(a):
-    c = a.cardTag + a.category + '_' + a.schemeFF
-    if a.decorrelateFFpars:
+def createCardName(args):
+    c = args.card_tag + args.category + '_' + args.ff_scheme
+    if args.decorrelate_ff_pars:
         c += 'decorr'
-    if a.freezeFF:
+    if args.freeze_ff:
         c += 'frozen'
-    if a.useMVA:
-        c += '_MVA'+a.useMVA
-    if a.asimov:
+    if args.use_mva:
+        c += '_MVA'
+    if args.asimov:
         c += '_Asimov'
-        if args.lumiMult != 1.:
-            c += '{:.0f}'.format(args.lumiMult)
-    if not a.unblinded:
+        if args.lumi_mult != 1.:
+            c += '{:.0f}'.format(args.lumi_mult)
+    if not args.unblinded:
         c += '_blinded'
-    if a.noMCstats:
+    if args.no_mc_stats:
         c += '_NoMCstats'
-    if not a.freeMuBr:
+    if not args.free_mu_br:
         c += '_muBrPDG'
-    # else:
-    #     c += '_freeMuBr'
     return c
 
-card_name = createCardName(args)
-print 'Card name:', card_name
-print 'Control regions:', ' '.join(args.controlRegions)
-
-basedir = os.path.dirname(os.path.abspath(__file__)).replace('Combine', '')
-
-outdir = basedir + 'Combine/results/' + card_name
-if not os.path.isdir(outdir):
-    os.system('mkdir -p ' + outdir + '/fig')
-card_location = basedir + 'Combine/cards/{}.txt'.format(card_name)
-histo_file_dir = basedir + 'data/_root/histos4combine/'
-
-userName = basedir[basedir.find('/user/')+6:].split('/')[0]
-webFolder = '/storage/af/user/'+userName+'/public_html/BPH_RDst/Combine/' + card_name
-if not os.path.isdir(webFolder):
-    os.makedirs(webFolder)
-    os.system('cp '+webFolder+'/../index.php '+webFolder)
-
-# Log command line call and arguments
-def dumpCallAndGitStatus():
-    with open(webFolder + '/callsLog.txt', 'a') as f:
+def dumpCallAndGitStatus(args):
+    """
+    Log command line call and arguments.
+    """
+    with open(join(webFolder,'callsLog.txt'), 'a') as f:
         f.write(50*'#'+'\n')
         f.write(datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '\n')
         f.write( ' '.join(sys.argv) + '\n')
         f.write(5*'>'+' Arguments\n')
-        f.write( yaml.dump(args.__dict__) )
+        f.write(yaml.dump(args.__dict__))
         f.write(5*'<'+'\n')
         f.write(50*'-'+ '\n')
 
     # Write git sha1 and any uncommited changes to the web directory
     diff = subprocess.check_output(['git','diff'])
-    with open(os.path.join(webFolder,'git_diff.log'), 'a') as f:
+    with open(join(webFolder,'git_diff.log'), 'a') as f:
         f.write('\n' + datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '\n')
         f.write(diff + '\n')
 
     sha1 = subprocess.check_output(['git','show-ref','--head','--hash=8'])
-    with open(os.path.join(webFolder,'git_sha1.log'), 'a') as f:
+    with open(join(webFolder,'git_sha1.log'), 'a') as f:
         f.write(datetime.now().strftime('%Y-%m-%d %H:%M:%S') + ' --> ' + sha1.decode("utf-8").split('\n')[0] + '\n')
 
 def runCommandSafe(command, printCommand=True):
+    """
+    Run a combine command and look for error messages. If there are any error
+    messages, print out the message and raise an exception.
+    """
     if printCommand:
         print command
     status, output = commands.getstatusoutput(command)
@@ -381,9 +522,10 @@ def runCommandSafe(command, printCommand=True):
         flag = flag or ('WARNING: MultiDimFit failed' in inputText)
         flag = flag or ('ERROR' in inputText and not 'Messages of type ERROR : 0' in inputText)
         flag = flag or ('There was a crash.' in inputText)
-        # flag = flag or ('Error' in inputText)
         return flag
+
     flagged = raiseFlag(output)
+
     if status or flagged:
         print output, '\n\n'
         print '==================================================================='
@@ -396,9 +538,8 @@ def runCommandSafe(command, printCommand=True):
             for line in output.split('\n'):
                 if raiseFlag(line):
                     print '\033[1m\x1b[31mFlagged line:\x1b[0m', line
-        raise
+        raise Exception("command failed!")
     return output
-########################### -------- Clean previous results ------------------ #########################
 
 def cleanPreviousResults():
     os.system('rm -v '+card_location.replace('.txt', '*'))
@@ -412,87 +553,52 @@ def cleanPreviousResults():
     os.makedirs(webFolder)
     os.system('cp '+webFolder+'/../index.php '+webFolder)
 
-
-########################### -------- Create histrograms ------------------ #########################
-controlRegSel = {}
-def selfun__TkPlus(ds):
-    sel = ds['ctrl2'] == 1
-    return sel
-controlRegSel['p_'] = selfun__TkPlus
-
-def selfun__TkMinus(ds):
-    sel = ds['ctrl2'] == 2
-    return sel
-controlRegSel['m_'] = selfun__TkMinus
-
-def selfun__TkPlusMinus(ds):
-    sel = (ds['ctrl2'] == 12) | (ds['ctrl2'] == 21)
-    sel = np.logical_and(ds['massVisTks'] < 5.55, sel)
-    return sel
-controlRegSel['pm'] = selfun__TkPlusMinus
-
-def selfun__TkMinusMinus(ds):
-    sel = ds['ctrl2'] == 22
-    sel = np.logical_and(ds['massVisTks'] < 5.3, sel)
-    return sel
-controlRegSel['mm'] = selfun__TkMinusMinus
-
-def selfun__TkPlusPlus(ds):
-    sel = ds['ctrl2'] == 11
-    sel = np.logical_and(ds['massVisTks'] < 5.3, sel)
-    return sel
-controlRegSel['pp'] = selfun__TkPlusPlus
-
 corrScaleFactors = {}
-def loadDatasets(category, loadRD):
+def loadDatasets(category, loadRD, args):
     print 'Loading MC datasets'
-    #They all have to be produced with the same pileup
-    # candDir='ntuples_B2DstMu_mediumId_lostInnerHits'
-    candDir='ntuples_B2DstMu_%s' % NTUPLE_TAG
-    print 'Using candDir =', candDir
-    print 'Using skim MC = skimmed'+args.skimmedTagMC
-    print 'Using skim RD = skimmed'+args.skimmedTagRD
+    candDir = 'ntuples_B2DstMu_%s' % NTUPLE_TAG
+    print 'Using candDir = %s' % candDir
+    print 'Using skim MC = skimmed%s' % args.skim_tag
+    print 'Using skim RD = skimmed%s' % args.skim_tag_rd
     MCsample = {
     ######## Signals
-    'tau': DSetLoader('Bd_TauNuDst', candDir=candDir, skimmedTag=args.skimmedTagMC),
-    'mu': DSetLoader('Bd_MuNuDst', candDir=candDir, skimmedTag=args.skimmedTagMC),
+    'tau':           DSetLoader('Bd_TauNuDst', candDir=candDir, skim_tag=args.skim_tag),
+    'mu':            DSetLoader('Bd_MuNuDst', candDir=candDir, skim_tag=args.skim_tag),
     ######## D** background
-    'Bu_MuDstPi': DSetLoader('Bu_MuNuDstPi', candDir=candDir, skimmedTag=args.skimmedTagMC),
-    'Bd_MuDstPi': DSetLoader('Bd_MuNuDstPi', candDir=candDir, skimmedTag=args.skimmedTagMC),
-    # 'Bd_MuDstPiPi': DSetLoader('Bd_MuNuDstPiPi', candDir=candDir, skimmedTag=args.skimmedTagMC),
-    'Bd_MuDstPiPi': DSetLoader('Bd_MuNuDstPiPi_v3', candDir=candDir, skimmedTag=args.skimmedTagMC),
-    'Bu_MuDstPiPi': DSetLoader('Bu_MuNuDstPiPi_v3', candDir=candDir, skimmedTag=args.skimmedTagMC),
-    'Bu_TauDstPi': DSetLoader('Bu_TauNuDstPi', candDir=candDir, skimmedTag=args.skimmedTagMC),
-    'Bd_TauDstPi': DSetLoader('Bd_TauNuDstPi', candDir=candDir, skimmedTag=args.skimmedTagMC),
-    'Bd_TauDstPiPi': DSetLoader('Bd_TauNuDstPiPi', candDir=candDir, skimmedTag=args.skimmedTagMC),
-    'Bu_TauDstPiPi': DSetLoader('Bu_TauNuDstPiPi', candDir=candDir, skimmedTag=args.skimmedTagMC),
-    'Bs_MuDstK': DSetLoader('Bs_MuNuDstK', candDir=candDir, skimmedTag=args.skimmedTagMC),
-    'Bs_TauDstK': DSetLoader('Bs_TauNuDstK', candDir=candDir, skimmedTag=args.skimmedTagMC),
+    'Bu_MuDstPi':    DSetLoader('Bu_MuNuDstPi', candDir=candDir, skim_tag=args.skim_tag),
+    'Bd_MuDstPi':    DSetLoader('Bd_MuNuDstPi', candDir=candDir, skim_tag=args.skim_tag),
+    'Bd_MuDstPiPi':  DSetLoader('Bd_MuNuDstPiPi_v3', candDir=candDir, skim_tag=args.skim_tag),
+    'Bu_MuDstPiPi':  DSetLoader('Bu_MuNuDstPiPi_v3', candDir=candDir, skim_tag=args.skim_tag),
+    'Bu_TauDstPi':   DSetLoader('Bu_TauNuDstPi', candDir=candDir, skim_tag=args.skim_tag),
+    'Bd_TauDstPi':   DSetLoader('Bd_TauNuDstPi', candDir=candDir, skim_tag=args.skim_tag),
+    'Bd_TauDstPiPi': DSetLoader('Bd_TauNuDstPiPi', candDir=candDir, skim_tag=args.skim_tag),
+    'Bu_TauDstPiPi': DSetLoader('Bu_TauNuDstPiPi', candDir=candDir, skim_tag=args.skim_tag),
+    'Bs_MuDstK':     DSetLoader('Bs_MuNuDstK', candDir=candDir, skim_tag=args.skim_tag),
+    'Bs_TauDstK':    DSetLoader('Bs_TauNuDstK', candDir=candDir, skim_tag=args.skim_tag),
     ######## D*Hc background
-    'Bd_DstDu': DSetLoader('Bd_DstDu', candDir=candDir, skimmedTag=args.skimmedTagMC),
-    'Bu_DstDu': DSetLoader('Bu_DstDu', candDir=candDir, skimmedTag=args.skimmedTagMC),
-    'Bd_DstDd': DSetLoader('Bd_DstDd', candDir=candDir, skimmedTag=args.skimmedTagMC),
-    'Bu_DstDd': DSetLoader('Bu_DstDd', candDir=candDir, skimmedTag=args.skimmedTagMC),
-    'Bd_DstDs': DSetLoader('Bd_DstDs', candDir=candDir, skimmedTag=args.skimmedTagMC),
-    'Bs_DstDs': DSetLoader('Bs_DstDs', candDir=candDir, skimmedTag=args.skimmedTagMC),
-    'Bd_DDs1': DSetLoader('Bd_DDs1', candDir=candDir, skimmedTag=args.skimmedTagMC),
-    'Bu_DDs1': DSetLoader('Bu_DDs1', candDir=candDir, skimmedTag=args.skimmedTagMC),
-    'B_DstDXX': DSetLoader('B_DstDXX', candDir=candDir, skimmedTag=args.skimmedTagMC),
+    'Bd_DstDu': DSetLoader('Bd_DstDu', candDir=candDir, skim_tag=args.skim_tag),
+    'Bu_DstDu': DSetLoader('Bu_DstDu', candDir=candDir, skim_tag=args.skim_tag),
+    'Bd_DstDd': DSetLoader('Bd_DstDd', candDir=candDir, skim_tag=args.skim_tag),
+    'Bu_DstDd': DSetLoader('Bu_DstDd', candDir=candDir, skim_tag=args.skim_tag),
+    'Bd_DstDs': DSetLoader('Bd_DstDs', candDir=candDir, skim_tag=args.skim_tag),
+    'Bs_DstDs': DSetLoader('Bs_DstDs', candDir=candDir, skim_tag=args.skim_tag),
+    'Bd_DDs1':  DSetLoader('Bd_DDs1', candDir=candDir, skim_tag=args.skim_tag),
+    'Bu_DDs1':  DSetLoader('Bu_DDs1', candDir=candDir, skim_tag=args.skim_tag),
+    #'B_DstDXX': DSetLoader('B_DstDXX', candDir=candDir, skim_tag=args.skim_tag),
     }
 
     dSet = {}
     dSetTkSide = {}
-    mcType = 'bare' if args.bareMC else 'corr'
-    print 'mcType:', mcType
-    if not args.maxEventsToLoad is None:
-        print 'Limiting events per MC sample to', args.maxEventsToLoad
+    mcType = 'bare' if args.bare_mc else 'corr'
+    print 'mcType: %s' % mcType
+    if args.max_events is not None:
+        print_warning('Warning: limiting events per MC sample to %.0f' % args.max_events)
 
-    relevantBranches = yaml.load(open('branches_to_load.yaml', 'r'))
+    relevantBranches = load_yaml('branches_to_load.yaml')
 
     for n, s in MCsample.iteritems():
         if not n in processOrder:
-            print n, 'not declarted in processOrder'
-            raise
+            raise Exception("%s not declarted in processOrder" % n)
 
         branches_to_load = relevantBranches['all'] + relevantBranches['mc']
         if n in ['tau', 'mu']:
@@ -503,20 +609,20 @@ def loadDatasets(category, loadRD):
             branches_to_load += relevantBranches['DstHc']
 
         filename = s.skimmed_dir + '/{}_{}.root'.format(category.name, mcType)
-        dSet[n] = load_data(filename, stop=args.maxEventsToLoad,branches=branches_to_load)
+        dSet[n] = load_data(filename, stop=args.max_events,branches=branches_to_load)
         filename = s.skimmed_dir + '/{}_trkCtrl_{}.root'.format(category.name, mcType)
-        dSetTkSide[n] = load_data(filename, stop=args.maxEventsToLoad,branches=branches_to_load)
+        dSetTkSide[n] = load_data(filename, stop=args.max_events,branches=branches_to_load)
 
 
     dataDir = '/storage/af/group/rdst_analysis/BPhysics/data/cmsRD'
-    locRD = dataDir+'/skimmed'+args.skimmedTagRD+'/B2DstMu_SS_{}_{}'.format(NTUPLE_TAG,category.name)
+    locRD = dataDir+'/skimmed'+args.skim_tag_rd+'/B2DstMu_SS_{}_{}'.format(NTUPLE_TAG,category.name)
     dSet['dataSS_DstMu'] = load_data(locRD + '_corr.root')
     dSetTkSide['dataSS_DstMu'] = load_data(locRD + '_trkCtrl_corr.root')
 
     if loadRD:
         print 'Loading real data datasets'
 
-        locRD = dataDir+'/skimmed'+args.skimmedTagRD+'/B2DstMu_{}_{}'.format(NTUPLE_TAG, category.name)
+        locRD = dataDir+'/skimmed'+args.skim_tag_rd+'/B2DstMu_{}_{}'.format(NTUPLE_TAG, category.name)
         dSet['data'] = load_data(locRD + '_corr.root', branches=relevantBranches['all'])
         dSetTkSide['data'] = load_data(locRD + '_trkCtrl_corr.root', branches=relevantBranches['all'])
 
@@ -524,11 +630,13 @@ def loadDatasets(category, loadRD):
         dSet[name]['ctrl'] = get_ctrl_group(dSet[name])
         dSet[name]['ctrl2'] = dSet[name]['ctrl']
         dSet[name]['tkPt_last'] = get_min_pt(dSet[name])
+        dSet[name]['PV_pval'] = 1-scipy_chi2.cdf(dSet[name]['PV_chi2'],dSet[name]['PV_ndof'])
 
     for name in dSetTkSide:
         dSetTkSide[name]['ctrl'] = get_ctrl_group(dSetTkSide[name])
         dSetTkSide[name]['ctrl2'] = dSetTkSide[name]['ctrl']
         dSetTkSide[name]['tkPt_last'] = get_min_pt(dSetTkSide[name])
+        dSetTkSide[name]['PV_pval'] = 1-scipy_chi2.cdf(dSetTkSide[name]['PV_chi2'],dSetTkSide[name]['PV_ndof'])
         if 'data' not in name:
             # Here is where we duplicate the MC to allow us to move events
             # between control regions.
@@ -552,8 +660,8 @@ def loadDatasets(category, loadRD):
             if name in dSet:
                 dSet[name] = pd.concat((dSet[name],dup[dup['ctrl2'] == 0]),ignore_index=True)
 
-    if args.useMVA:
-        fname = '/storage/af/group/rdst_analysis/BPhysics/data/kinObsMVA/clfGBC_tauVall_{}{}.p'.format(args.useMVA, category.name)
+    if args.use_mva:
+        fname = '/storage/af/group/rdst_analysis/BPhysics/data/kinObsMVA/clfGBC_tauVall_v3{}.p'.format(category.name)
         clfGBC = pickle.load(open(fname, 'rb'))
 
         print 'Computing MVA results'
@@ -575,44 +683,46 @@ def loadDatasets(category, loadRD):
             dSetTkSide[n]['MVA'] = clfGBC.predict_proba(dSetTkSide[n][clfGBC.featuresNames])[:,1]
         print '\n'
 
-    if args.Breco in ['coll', 'prefit']:
-        print '[INFO] Using '+args.Breco+' B reconstruction'
+    if args.b_reco in ['coll', 'prefit']:
+        print '[INFO] Using '+args.b_reco+' B reconstruction'
         for name in dSet:
             dSet[name].drop(columns=['q2', 'Est_mu', 'M2_miss'], inplace=True)
-            dSet[name].rename(columns={'q2_'+args.Breco:'q2', 'Est_mu_'+args.Breco:'Est_mu', 'M2_miss_'+args.Breco:'M2_miss'}, inplace=True)
+            dSet[name].rename(columns={'q2_'+args.b_reco:'q2', 'Est_mu_'+args.b_reco:'Est_mu', 'M2_miss_'+args.b_reco:'M2_miss'}, inplace=True)
         for name in dSetTkSide:
             dSetTkSide[name].drop(columns=['q2', 'Est_mu', 'M2_miss'], inplace=True)
-            dSetTkSide[name].rename(columns={'q2_'+args.Breco:'q2', 'Est_mu_'+args.Breco:'Est_mu', 'M2_miss_'+args.Breco:'M2_miss'}, inplace=True)
+            dSetTkSide[name].rename(columns={'q2_'+args.b_reco:'q2', 'Est_mu_'+args.b_reco:'Est_mu', 'M2_miss_'+args.b_reco:'M2_miss'}, inplace=True)
 
-    if args.dumpWeightsTree:
+    if args.dump_weights_tree:
         print 'Skipping on the flight cuts (if any).'
     else:
-        if args.cutMuPS:
+        if args.cut_mu_ps:
             addCuts = [ ['M2_miss', 0.4, 1e3] ]
         else:
             addCuts = [ ['M2_miss', -2., 1e3] ]
 
         addCuts += [
         ['mu_eta', -0.8, 0.8],
+        ['PV_pval', 0, 0.95],
         # ['mu_pt', 0, 20],
         # ['B_eta', -1., 1.],
         # ['pis_pt', 1., 1e3],
-        ['mu_db_iso04', 0, 80],
+        # ['mu_db_iso04', 0, 80],
         ['mu_lostInnerHits', -2, 1],
         ['K_lostInnerHits', -2, 1],
         ['pi_lostInnerHits', -2, 1],
         ['pis_lostInnerHits', -2, 1],
         ['mass_piK', 1.86483-0.035, 1.86483+0.035],
         ['deltaM_DstD', 0.14543-1.e-3, 0.14543+1.e-3],
-        # ['pval_D0pismu', 0.1, 1.0],
+        ['pval_D0pismu', 0.1, 1.0],
         # ['ctrl_tk_pval_0', 0.2, 1.0],
         # ['ctrl_tk_pval_1', 0.2, 1.0],
         # ['ctrl_pm_massVisTks', 0, 3.8],
         # ['ctrl_pm_massHadTks', 2.6, 10],
         # ['ctrl_pm_index', 3, 0],
+        ['sigdxy_vtxD0_PV',10,1e3],
         ]
 
-        if args.useMVA and not args.unblinded:
+        if args.use_mva and not args.unblinded:
             print 'Discarding events with good MVA'
             addCuts.append(['MVA', 0, 0.7])
 
@@ -635,8 +745,7 @@ def loadDatasets(category, loadRD):
                 for var, low, high in addCuts:
                     if var.startswith('ctrl_'): continue
                     if var not in dSet[k].columns:
-                        print var, 'not in', k, 'main dataset'
-                        raise
+                        raise Exception("%s not in %s main dataset" % (var,k))
                     sel = np.logical_and(sel, np.logical_and(dSet[k][var] > low, dSet[k][var] < high))
 
 
@@ -664,8 +773,7 @@ def loadDatasets(category, loadRD):
                             region = var[:2]
                             var = var[3:]
                     if var not in dSetTkSide[k].columns:
-                        print var, 'not in', k, 'control regions dataset'
-                        raise
+                        raise Exception("%s not in %s main dataset" % (var,k))
                     if var == 'index':
                         thisSel = np.mod(dSetTkSide[k][var], low) <= high
                     else:
@@ -707,9 +815,12 @@ def computeBrVarWeights(ds, selItems={}, relScale=0.2, centralVal=1., keepNorm=F
         down = (float(down.shape[0])/np.sum(down)) * down
     return w, up/w, down/w
 
-def computeWidthVarWeights(ds, selItems=[], newGamma=None, relScale=0.1, keepNorm=False): #Gamma modification factor
-    # See EvtGen BW implementation: https://github.com/alberto-sanchez/evtgen-cms/blob/master/src/EvtGenBase/EvtBreitWignerPdf.cpp#L41
-    # selItems=[ [pdgId, mass, Gamma] ]
+def computeWidthVarWeights(ds, selItems=[], newGamma=None, relScale=0.1, keepNorm=False):
+    """
+    Gamma modification factor.
+    """
+    # See EvtGen BW implementation:
+    # https://github.com/alberto-sanchez/evtgen-cms/blob/master/src/EvtGenBase/EvtBreitWignerPdf.cpp#L41
     w = np.ones_like(ds['mu_pt'])
     up = np.ones_like(ds['mu_pt'])
     down = np.ones_like(ds['mu_pt'])
@@ -759,20 +870,19 @@ def computeRandomTracksWeights(ds, relScale=0.1, centralVal=1., kind=None):
         selPdgID0 = np.logical_and(selPdgID0, ds['MC_tkFlag_0'] == 1)
         selPdgID1 = np.logical_and(selPdgID1, ds['MC_tkFlag_1'] == 1)
     else:
-        print 'Kind', kind, 'not recognized'
-        raise
+        raise Exception("Kind %s not recognized" % kind)
     exponent = selPdgID0.astype(np.int) + selPdgID1.astype(np.int)
     w = np.power(centralVal, exponent)
     up = np.power(centralVal*(1+relScale), exponent)/w
     down = np.power(centralVal*max(0, 1-relScale), exponent)/w
     return w, up, down
 
-def createHistograms(category):
+def createHistograms(category, args):
     cmd = 'rm -fv '+histo_file_dir+'histos_{}_ready.log'.format(card_name)
     os.system(cmd)
 
-    MCsample, dSet, dSetTkSide = loadDatasets(category, not args.asimov)
-    mcType = 'bare' if args.bareMC else 'corr'
+    MCsample, dSet, dSetTkSide = loadDatasets(category, not args.asimov, args)
+    mcType = 'bare' if args.bare_mc else 'corr'
     ######################################################
     ########## Load calibrations
     ######################################################
@@ -781,10 +891,11 @@ def createHistograms(category):
     puReweighter = pileupReweighter(skimmedFile_loc, 'hAllNTrueIntMC', trg=category.trg)
 
     fname = '/storage/af/group/rdst_analysis/BPhysics/data/calibration/beamSpot/crystalball_calibration_v2_bs_'+category.name.capitalize()+'.yaml'
-    beamSpotParam = yaml.load(open(fname, 'r'))
+    beamSpotParam = load_yaml(fname)
 
     dataDir = '/storage/af/group/rdst_analysis/BPhysics/data'
-    decayBR = pickle.load(open(dataDir+'/forcedDecayChannelsFactors_v2.pickle', 'rb'))
+    with open(dataDir+'/forcedDecayChannelsFactors_v2.pickle', 'rb') as f:
+        decayBR = pickle.load(f)
 
     loc = dataDir+'/calibration/triggerScaleFactors/'
     fTriggerSF = rt.TFile.Open(loc + 'HLT_' + category.trg + '_SF_v49.root', 'READ')
@@ -820,7 +931,7 @@ def createHistograms(category):
             trgSFUnc[i] = hSF.GetBinError(ib)
             if trgSF[i] == 0:
                 print pt, ip, np.abs(eta)
-                raise
+                raise Exception("trigger scale factor equals zero!")
 
         # Divide them for the weight so later you can simply multiply back to get the value
         up = 1 + trgSFUnc/trgSF
@@ -846,27 +957,25 @@ def createHistograms(category):
             if muonSF[i] == 0:
                 print pt, eta
                 print ix, iy
-                raise
+                raise Exception("muon scale factor equals zero!")
         up = 1 + muonSFUnc/muonSF
         down = 1 - muonSFUnc/muonSF
-    #     print np.column_stack((muonSF, up, down, muonSF*up, muonSF*down))
-    #     raise
         return muonSF, up, down
 
     # Kinematic calibration of Bd
     auxTag = 'v5_220601_base'
     # auxTag += '_eta1p5'
-    # if args.cutMuPS:
+    # if args.cut_mu_ps:
     #     auxTag = '_eta0p8'
-    # if args.beamSpotCalibration:
+    # if args.beamspot_calibration:
     #     auxTag += '_BScal'
     # else:
     #     auxTag += '_noBScal'
 
-    if args.calBpT == 'none':
-        print 'Not using any B pT calibration'
-    elif args.calBpT == 'poly':
+    if args.cal_b_pt:
         cal_pT_Bd = kinCalReader(calibration_file=dataDir+'/calibration/kinematicCalibration_Bd/pt_polyCoeff_'+category.name+'_'+auxTag+'.pkl')
+    else:
+        print 'Not using any B pT calibration'
 
     cal_eta_B = kinCalReader(calibration_file=dataDir+'/calibration/kinematicCalibration_Bd/eta_polyCoeff_'+category.name+'_'+auxTag+'.pkl')
     cal_addTK_pt = kinCalReader(calibration_file=dataDir+'/calibration/kinematicCalibration_Bd/addTk_pt_polyCoeff_'+category.name+'_'+auxTag+'.pkl')
@@ -875,9 +984,9 @@ def createHistograms(category):
         if kinCal.kind == 'poly':
             # The denominator (sum of weights) for this weights is not known but it cancel out in the ratio
             w = kinCal.getWeights(ds[var], shape=0)
-            if np.sum(w==0):
-                print np.sum(w==0)
-                raise
+            if np.sum(w == 0):
+                print np.sum(w == 0)
+                raise Exception("some weights are zero!")
 
             varDic = {}
             for iShape in range(1, kinCal.nVar+1):
@@ -887,16 +996,14 @@ def createHistograms(category):
             return w, varDic
         elif kinCal.kind == 'ratio':
             w = kinCal.f['C'](ds[var])
-            if np.sum(w==0):
-                print np.sum(w==0)
-                raise
+            if np.sum(w == 0):
+                print np.sum(w == 0)
+                raise Exception("some weights are zero!")
             up = kinCal.f['Up'](ds[var])/w
             down = kinCal.f['Down'](ds[var])/w
             return w, up, down
         else:
-            print 'Unknown calibration'
-            raise
-
+            raise Exception("Unknown calibration")
 
     parsSoftTracks = {'s':[0.2, 0.15], 'w':[0.9, 0.05]}
     def fSoftTrackEff(x, w, s):
@@ -909,14 +1016,14 @@ def createHistograms(category):
         sel = np.logical_or(x < 0.2, x > 3.5)
         return np.where(sel, np.ones_like(x), np.polyval(beta, x))
 
-    softPtUnc= [[0.5, 0.6, 0.10],
-                [0.6, 0.7, 0.07],
-                [0.7, 0.8, 0.05],
-                [0.8, 0.9, 0.04],
-                [0.9, 1.0, 0.03],
-                [1.0, 1.2, 0.02],
-                [1.2, 2.0, 0.01],
-                ]
+    softPtUnc = [[0.5, 0.6, 0.10],
+                 [0.6, 0.7, 0.07],
+                 [0.7, 0.8, 0.05],
+                 [0.8, 0.9, 0.04],
+                 [0.9, 1.0, 0.03],
+                 [1.0, 1.2, 0.02],
+                 [1.2, 2.0, 0.01],
+                 ]
     def binnnedSoftTrackEff(x, bin, size):
         sel = np.logical_or(x < softPtUnc[bin][0], x > softPtUnc[bin][1])
         return np.where(sel, np.ones_like(x), 1+size*softPtUnc[bin][2])
@@ -934,13 +1041,13 @@ def createHistograms(category):
 
     histo = {}
     eventCountingStr = {}
-    data_over_MC_overallNorm = 0.82
+    data_over_MC_overallNorm = 1.4
 
     ######################################################
     ########## Signal region
     ######################################################
     n_q2bins = len(binning['q2'])-1
-    if args.Breco in ['coll', 'prefit']:
+    if args.b_reco in ['coll', 'prefit']:
         binning['M2_miss'] = [
                 array('d', list(np.arange(0., 1., 0.02)) + [1.2] ),
                 array('d', list(np.arange(0.5, 2.2, 0.025)) + [2.2] ),
@@ -976,7 +1083,7 @@ def createHistograms(category):
         ]
     else:
         lowSide = []
-        if not args.cutMuPS:
+        if not args.cut_mu_ps:
             lowSide = [-2.0, -1.0, -0.6, -0.4, -0.2, 0., 0.1, 0.2, 0.3]
         binning['M2_miss'] = [
                 array('d', lowSide + [0.4, 0.5, 0.75, 1, 1.5, 4] ),
@@ -994,7 +1101,7 @@ def createHistograms(category):
 
 
         lowSide = [[], []]
-        if not args.cutMuPS:
+        if not args.cut_mu_ps:
             lowSide = [[-2.0, -1.0, -0.4,  -0.2, 0., 0.1, 0.2, 0.3], [-1.0, -0.4, -0.2, 0.]]
 
         binning_2D = [
@@ -1018,13 +1125,16 @@ def createHistograms(category):
         ]
 
     binning['MVA'] = [10, 0, 1]
-    if args.useMVA:
+    if args.use_mva:
         bbb = np.arange(0., np.max(dSet['tau']['MVA']) + 0.0249, 0.025)
         binning['MVA'] = array('d', list(bbb))
     binning['specQ2'] = array('d', list(np.arange(-2, 11.4, 0.2)))
     # binning['mu_sigIP3D_vtxDst'] = 4*[[70, -4, 4]]
     # binning['U_miss'] = 4*[[30, -0.1, 0.18]]
     binning['B_pt'] = array('d', list({'Low': np.arange(10, 75, 2), 'Mid': np.arange(14, 90, 2), 'High': np.arange(18, 110, 2)}[category.name]))
+    binning['PV_pval'] = array('d', list({'Low': np.arange(0, 1, 0.01), 'Mid': np.arange(0, 1, 0.01), 'High': np.arange(0, 1, 0.01)}[category.name]))
+    binning['pval_piK'] = array('d', list({'Low': np.arange(0, 1, 0.01), 'Mid': np.arange(0, 1, 0.01), 'High': np.arange(0, 1, 0.01)}[category.name]))
+    binning['pval_D0pis'] = array('d', list({'Low': np.arange(0, 1, 0.01), 'Mid': np.arange(0, 1, 0.01), 'High': np.arange(0, 1, 0.01)}[category.name]))
     binning['mu_pt'] = array('d',
                         {'Low': list(np.arange(7.2, 9.201, 0.05)),
                         'Mid': list(np.arange(9.2, 12.201, 0.05)),
@@ -1044,21 +1154,19 @@ def createHistograms(category):
     observables_q2bins = []
     observables_q2integrated = []
     if n_q2bins == 3:
-        print 'Fix this because it will break'
-        raise
+        raise Exception("Number of q2 bins is 3. Fix this because it will break!")
     for v, bbb in binning.iteritems():
         if v in ['q2']:
             continue
-        elif v == 'MVA' and not args.useMVA:
+        elif v == 'MVA' and not args.use_mva:
             continue
         elif len(bbb) == n_q2bins and (isinstance(bbb[0], list) or isinstance(bbb[0], array)):
             observables_q2bins.append(v)
         elif (len(bbb) == 3 and isinstance(bbb, list)) or isinstance(bbb, array):
             observables_q2integrated.append(v)
         else:
-            print 'Binning not recognized'
             print v, bbb
-            raise
+            raise Exception("Binning not recognized")
     print 'Signal region observables divided in q2 bins', len(observables_q2bins), ':', ' '.join(observables_q2bins)
     print 'Signal region observables integrated in q2', len(observables_q2integrated), ':', ' '.join(observables_q2integrated)
 
@@ -1067,7 +1175,8 @@ def createHistograms(category):
     print '---------> Fill signal region histograms'
     for n in processOrder:
         ds = dSet[n]
-        if n == 'data': continue
+        if n == 'data':
+            continue
         print '\n----------->', n, '<-------------'
         wVar = {}
         weights = {}
@@ -1099,7 +1208,7 @@ def createHistograms(category):
             print 'Including pileup reweighting'
             weights['pileup'] = puReweighter.getPileupWeights(ds['MC_nInteractions'])
 
-            if args.beamSpotCalibration:
+            if args.beamspot_calibration:
                 print 'Including beam spot correction'
                 weights['beamSpot'] = getBeamSpotCorrectionWeights(ds, beamSpotParam, ref='bs')
                 wVar[category.name+'BSyUp'] = getBeamSpotCorrectionWeights(ds, beamSpotParam, ref='bs', dmu_x=0, dmu_y=8)/weights['beamSpot']
@@ -1157,7 +1266,7 @@ def createHistograms(category):
             weights[cname], auxVarDic = computeKinCalWeights(ds, 'MC_B_eta', cname, cal_eta_B)
             wVar.update(auxVarDic)
 
-            if (not args.calBpT == 'none') and (n in samples_Bd):
+            if args.cal_b_pt and n in samples_Bd:
                 print 'Including Bd pT corrections'
                 cname = 'BdpT'+category.name
                 if cal_pT_Bd.kind == 'ratio':
@@ -1169,14 +1278,14 @@ def createHistograms(category):
         ############################
         # Form factor correction
         ############################
-        if n in ['mu', 'tau'] and schemeFF != 'NoFF':
+        if n in ['mu', 'tau'] and args.ff_scheme != 'NoFF':
             print 'Including B-> D*EllNu FF corrections (Hammer)'
-            weights['B2DstFF'] = ds['wh_'+schemeFF+'Central']*sMC.effCand['rate_den']/sMC.effCand['rate_'+schemeFF+'Central']
-            for nPar in FreeParFF:
+            weights['B2DstFF'] = (ds['wh_'+args.ff_scheme+'Central']*sMC.effCand['rate_den']/sMC.effCand['rate_'+args.ff_scheme+'Central']).values
+            for nPar in FreeParFF[args.ff_scheme]:
                 for var in ['Up', 'Down']:
-                    tag = schemeFF + nPar + var
-                    wVar['B2Dst'+tag] = ds['wh_'+tag]/ds['wh_'+schemeFF+'Central']
-                    wVar['B2Dst'+tag] *= sMC.effCand['rate_'+schemeFF+'Central']/sMC.effCand['rate_' + tag]
+                    tag = args.ff_scheme + nPar + var
+                    wVar['B2Dst'+tag] = ds['wh_'+tag]/ds['wh_'+args.ff_scheme+'Central']
+                    wVar['B2Dst'+tag] *= sMC.effCand['rate_'+args.ff_scheme+'Central']/sMC.effCand['rate_' + tag]
                     wVar['B2Dst'+tag][np.isnan(wVar['B2Dst'+tag])] = 0.
 
         if '_MuDstPi' in n:
@@ -1312,6 +1421,7 @@ def createHistograms(category):
         weightsCentral = np.ones_like(ds['q2'])
         for wName, w in weights.iteritems():
             if np.max(np.abs(w)) > 3:
+                # FIXME: some weights are dataframes?
                 iMax = np.argmax(np.abs(w))
                 print '[WARNING] Max weights', wName, ': {:.3}'.format(w[iMax])
             weightsCentral *= w
@@ -1321,12 +1431,12 @@ def createHistograms(category):
         eventCountingStr[n] = evCountStr
         wVar[''] = np.ones_like(weightsCentral)
 
-        if args.dumpWeightsTree and not 'data' in n:
+        if args.dump_weights_tree and not 'data' in n:
             weightsDir = os.path.join(MCsample[n].skimmed_dir, 'weights')
             if not os.path.isdir(weightsDir):
                 os.makedirs(weightsDir)
 
-            mcType = 'bare' if args.bareMC else 'corr'
+            mcType = 'bare' if args.bare_mc else 'corr'
             auxName = category.name + '_' + mcType + '_' + card_name + '.root'
 
             wDf = pd.DataFrame.from_dict({'central': weightsCentral*nTotExp/nTotSelected})
@@ -1336,102 +1446,18 @@ def createHistograms(category):
             print 'Dumping weights tree in', os.path.join(weightsDir, auxName)
             rtnp.array2root(wDf.to_records(), os.path.join(weightsDir, auxName), treename='weights', mode='RECREATE')
 
+        new_histo = histogram(ds, n, binning, binning_2D, weightsCentral, wVar, observables_q2bins, observables_q2integrated, nTotExp, nTotSelected)
 
-        # Variables to be broken in q2 bins
-        for i_q2 in range(n_q2bins):
-            q2_l = binning['q2'][i_q2]
-            q2_h = binning['q2'][i_q2 + 1]
-            sel_q2 = np.logical_and(ds['q2'] > q2_l, ds['q2'] <= q2_h)
-            name2D = 'h2D_q2bin'+str(i_q2)
-            if not name2D in histo.keys():
-                    histo[name2D] = {}
-            for var in observables_q2bins:
-                cat_name = var+'_q2bin'+str(i_q2)
+        histo = update(histo,new_histo)
 
-                if not cat_name in histo.keys():
-                    histo[cat_name] = {}
+    histo, unrolledBins = unroll(histo, binning)
 
-                for name_wVar, v_wVar in wVar.iteritems():
-                    h_name = n
-                    if not name_wVar == '':
-                        h_name += '__' + name_wVar
-                    w = weightsCentral*v_wVar
-                    scale = nTotExp/nTotSelected
-                    histo[cat_name][h_name] = create_TH1D(
-                                                          ds[var][sel_q2],
-                                                          name=h_name, title=h_name,
-                                                          binning=binning[var][i_q2],
-                                                          opt='underflow,overflow',
-                                                          weights=w[sel_q2], scale_histo=scale,
-                                                          )
-                    if var == 'M2_miss':
-                        auxS = np.column_stack((ds['M2_miss'][sel_q2], ds['Est_mu'][sel_q2]))
-                        histo[name2D][h_name] = create_TH2D(
-                                                              auxS,
-                                                              name=h_name, title=h_name,
-                                                              binning=binning_2D[i_q2],
-                                                              weights=w[sel_q2], scale_histo=scale,
-                                                           )
-
-        # Variables in the whole spectrum
-        for var in observables_q2integrated:
-            if not var in histo.keys():
-                histo[var] = {}
-            for name_wVar, v_wVar in wVar.iteritems():
-                h_name = n
-                if not name_wVar == '':
-                    h_name += '__' + name_wVar
-                w = weightsCentral*v_wVar
-                scale = nTotExp/nTotSelected
-                varName = var
-                if var == 'specQ2':
-                    varName = 'q2'
-                histo[var][h_name] = create_TH1D(ds[varName], name=h_name, weights=w, scale_histo=scale,
-                                                    binning=binning[var], opt='underflow,overflow')
+    if not args.dump_weights_tree:
+        with open(outdir+'/unrolledBinsMap.pkl', 'wb') as f:
+            pickle.dump(unrolledBins, f)
 
     evCountStr = '{:.1f} ({:.1f})'.format(*totalCounting)
     eventCountingStr['tot'] = evCountStr
-
-    # Do the unrolling
-    print '\n\n########### Unrolling 2D histograms ###########'
-    unrolledBins = []
-    unrollingCutOff = 3
-    for i_q2 in range(len(binning['q2'])-1):
-        unrolledBins.append([])
-        name2D = 'h2D_q2bin'+str(i_q2)
-        hSum = None
-        nDroppedBins = 0
-        nExpectedDroppedEvents = 0
-        for key, hN in histo[name2D].iteritems():
-            if '__' in key:
-                continue
-            if hSum is None:
-                hSum = hN.Clone('hSum_'+str(i_q2))
-            else:
-                scale = SM_RDst if 'tau' in n else 1.
-                hSum.Add(hN, scale)
-        for ix in range(1, hSum.GetNbinsX()+1):
-            for iy in range(1, hSum.GetNbinsY()+1):
-                if hSum.GetBinContent(ix, iy) > unrollingCutOff:
-                    unrolledBins[i_q2].append([ix, iy])
-                else:
-                    nDroppedBins += 1
-                    nExpectedDroppedEvents += hSum.GetBinContent(ix, iy)
-        print 'Dropped bins:', nDroppedBins
-        print 'Expected dropped candidates:', nExpectedDroppedEvents
-
-        nameU = 'Unrolled_q2bin'+str(i_q2)
-        histo[nameU] = {}
-        validBins = unrolledBins[i_q2]
-        for n, h in histo[name2D].iteritems():
-            hUnrolled = rt.TH1D(h.GetName(), h.GetTitle(), len(validBins), 0.5, len(validBins)+0.5)
-            for i, (ix, iy) in enumerate(validBins):
-                hUnrolled.SetBinContent(i+1, h.GetBinContent(ix, iy))
-                hUnrolled.SetBinError(i+1, h.GetBinError(ix, iy))
-            histo[nameU][n] = hUnrolled
-    if not args.dumpWeightsTree:
-        pickle.dump(unrolledBins, open(outdir+'/unrolledBinsMap.pkl', 'wb'))
-
 
     ######################################################
     ########## Control region
@@ -1447,11 +1473,9 @@ def createHistograms(category):
     binning['ctrl_m__mHad'] = [40, 2.1, 3.3]
 
     ctrlVar['ctrl_pm_mVis'] = 'massVisTks'
-    # binning['ctrl_pm_mVis'] = array('d', [2.8] + list(np.arange(3., 5.5, 0.07)) + [5.55] )
     binning['ctrl_pm_mVis'] = array('d', [2.8] + list(np.arange(3., 5.5, 0.12)) + [5.5] )
 
     ctrlVar['ctrl_pm_mHad'] = 'massHadTks'
-    # binning['ctrl_pm_mHad'] = [75, 2.3, 3.8]
     binning['ctrl_pm_mHad'] = [50, 2.3, 3.8]
 
     ctrlVar['ctrl_mm_mHad'] = 'massHadTks'
@@ -1481,7 +1505,7 @@ def createHistograms(category):
     for s in ['m_', 'p_', 'mm', 'pm', 'pp']:
         # ctrlVar['ctrl_'+s+'_mu_pt'] = 'mu_pt'
         # binning['ctrl_'+s+'_mu_pt'] = binning['mu_pt'][0]
-        if args.useMVA:
+        if args.use_mva:
             ctrlVar['ctrl_'+s+'_MVA'] = 'MVA'
             binning['ctrl_'+s+'_MVA'] = binning['MVA']
 
@@ -1506,10 +1530,9 @@ def createHistograms(category):
     # Figuring out the mod to avoid double counting
     ctrlVar_mod = defaultdict(lambda : None)
     ctrlVar_counter = defaultdict(lambda : 0)
-    for r in args.controlRegions:
+    for r in args.control_regions:
         if not 'ctrl_'+r in ctrlVar.keys():
-            print '[ERROR] Region "{}" not defined'.format(r)
-            raise
+            raise Exception("[ERROR] Region '{}' not defined".format(r))
 
         ctrlVar_mod['ctrl_'+r] = [ -1, ctrlVar_counter[r[:2]] ]
         ctrlVar_counter[r[:2]]+= 1
@@ -1518,7 +1541,6 @@ def createHistograms(category):
         ctrlVar_mod[k][0] = ctrlVar_counter[k[5:7]]
 
     print '[DEBUG] Control regions modulos:', ','.join([k+':'+str(v) for k, v in ctrlVar_mod.iteritems()])
-
 
     print '---------> Fill control regions histograms'
     for k in ctrlVar.keys():
@@ -1556,7 +1578,7 @@ def createHistograms(category):
             print 'Including pileup reweighting'
             weights['pileup'] = puReweighter.getPileupWeights(ds['MC_nInteractions'])
 
-            if args.beamSpotCalibration:
+            if args.beamspot_calibration:
                 print 'Including beam spot correction'
                 weights['beamSpot'] = getBeamSpotCorrectionWeights(ds, beamSpotParam, ref='bs')
                 wVar[category.name+'BSyUp'] = getBeamSpotCorrectionWeights(ds, beamSpotParam, ref='bs', dmu_x=0, dmu_y=8)/weights['beamSpot']
@@ -1613,7 +1635,7 @@ def createHistograms(category):
             weights[cname], auxVarDic = computeKinCalWeights(ds, 'MC_B_eta', cname, cal_eta_B)
             wVar.update(auxVarDic)
 
-            if (not args.calBpT == 'none') and (n in samples_Bd):
+            if args.cal_b_pt and n in samples_Bd:
                 print 'Including Bd pT corrections'
                 cname = 'BdpT'+category.name
                 if cal_pT_Bd.kind == 'ratio':
@@ -1623,7 +1645,7 @@ def createHistograms(category):
                     wVar.update(auxVarDic)
 
             # Correct the amount of random tracks from PV
-            aux = '' if args.correlate_tkPVfrac else category.name
+            aux = '' if args.correlate_tk_pv_frac else category.name
             weights['randTksPV'], wVar['randTksPV'+aux+'Up'], wVar['randTksPV'+aux+'Down'] = computeRandomTracksWeights(ds, relScale=0.5, centralVal=1.3, kind='PV')
             print 'Average random tracks from PV weight: {:.2f}'.format(np.mean(weights['randTksPV']))
             weights['randTksPU'], wVar['randTksPU'+aux+'Up'], wVar['randTksPU'+aux+'Down'] = computeRandomTracksWeights(ds, relScale=0.5, centralVal=1.3, kind='PU')
@@ -1649,14 +1671,14 @@ def createHistograms(category):
         ############################
         # Form factor correction
         ############################
-        if n in ['mu', 'tau'] and schemeFF != 'NoFF':
+        if n in ['mu', 'tau'] and args.ff_scheme != 'NoFF':
             print 'Including FF corrections (Hammer)'
-            weights['B2DstFF'] = ds['wh_'+schemeFF+'Central']*sMC.effCand['rate_den']/sMC.effCand['rate_'+schemeFF+'Central']
-            for nPar in FreeParFF:
+            weights['B2DstFF'] = (ds['wh_'+args.ff_scheme+'Central']*sMC.effCand['rate_den']/sMC.effCand['rate_'+args.ff_scheme+'Central']).values
+            for nPar in FreeParFF[args.ff_scheme]:
                 for var in ['Up', 'Down']:
-                    tag = schemeFF + nPar + var
-                    wVar['B2Dst'+tag] = ds['wh_'+tag]/ds['wh_'+schemeFF+'Central']
-                    wVar['B2Dst'+tag] *= sMC.effCand['rate_'+schemeFF+'Central']/sMC.effCand['rate_' + tag]
+                    tag = args.ff_scheme + nPar + var
+                    wVar['B2Dst'+tag] = ds['wh_'+tag]/ds['wh_'+args.ff_scheme+'Central']
+                    wVar['B2Dst'+tag] *= sMC.effCand['rate_'+args.ff_scheme+'Central']/sMC.effCand['rate_' + tag]
                     wVar['B2Dst'+tag][np.isnan(wVar['B2Dst'+tag])] = 0.
 
 
@@ -1793,12 +1815,12 @@ def createHistograms(category):
             weightsCentral *= w
         wVar[''] = np.ones_like(weightsCentral)
 
-        if args.dumpWeightsTree and not 'data' in n:
+        if args.dump_weights_tree and not 'data' in n:
             weightsDir = os.path.join(MCsample[n].skimmed_dir, 'weights')
             if not os.path.isdir(weightsDir):
                 os.makedirs(weightsDir)
 
-            mcType = 'bare' if args.bareMC else 'corr'
+            mcType = 'bare' if args.bare_mc else 'corr'
             auxName = category.name + 'trkCtrl_' + mcType + '_' + card_name + '.root'
 
             orig = ds['ctrl'] == ds['ctrl2']
@@ -1843,32 +1865,12 @@ def createHistograms(category):
         print s
         eventCountingStr[n] += ' & ' + s + '\\\\'
 
+        new_histo = histogram_ctrl(ds, n, binning, weightsCentral, wVar, sel, ctrlVar, ctrlVar_mod, scale)
 
-        for name_wVar, v_wVar in wVar.iteritems():
-            h_name = n
-            if not name_wVar == '':
-                h_name += '__' + name_wVar
-            w = weightsCentral*v_wVar
+        histo = update(histo,new_histo)
 
-            for k, var in ctrlVar.iteritems():
-                region = k[5:7]
-
-                auxSel = sel[region]
-                if not ctrlVar_mod[k] is None:
-                    m, j = ctrlVar_mod[k]
-                    if m > 1:
-                        auxSel = np.logical_and( np.mod(ds['index'], m) == j, auxSel )
-
-                histo[k][h_name] = create_TH1D(ds[var][auxSel],
-                                               name=h_name, title=h_name,
-                                               binning=binning[k],
-                                               opt='',
-                                               weights=w[auxSel], scale_histo=scale[region]
-                                              )
-
-
-    if args.dumpWeightsTree:
-        print 'Exiting runCombine.py. To run further remove dumpWeightsTree option.'
+    if args.dump_weights_tree:
+        print 'Exiting runCombine.py. To run further remove dump_weights_tree option.'
         exit()
 
     s = ' & '.join(['{:.0f} ({:.0f})'.format(*totalCounting[s]) for s in ['p_', 'm_', 'mm', 'pm', 'pp']]) + ' \\\\'
@@ -1973,7 +1975,9 @@ def createHistograms(category):
 
 ########################### -------- Create histrograms ------------------ #########################
 
-def drawPlots(tag, hDic, catName, scale_dic={}):
+def drawPlots(tag, hDic, catName, args, scale_dic=None):
+    if scale_dic is None:
+        scale_dic = {}
     print 20*'-', 'Drawing plots', tag, 20*'-'
     outCanvas = []
     CMS_lumi.integrated_lumi = expectedLumi[catName]
@@ -1986,6 +1990,36 @@ def drawPlots(tag, hDic, catName, scale_dic={}):
                           iq2_maskData=[] if args.unblinded else [2, 3])
     cAux.SaveAs(webFolder+'/signalRegion_'+tag+'.png')
     outCanvas.append(cAux)
+
+    if 'PV_pval' in hDic.keys():
+        print 'Drawing PV_pval'
+        hDic['PV_pval']['data'].GetXaxis().SetTitle('PV p-value')
+        hDic['PV_pval']['data'].GetYaxis().SetTitle('Events')
+        cAux = plot_SingleCategory(CMS_lumi, hDic['PV_pval'], draw_pulls=True, pullsRatio=True, scale_dic=scale_dic,
+                                   addText='Cat. '+catName, logy=False, legBkg=True,
+                                   min_y=1, tag=tag+'PV_pval', legLoc=[0.65, 0.4, 0.9, 0.75])
+        cAux.SaveAs(webFolder+'/PV_pval_'+tag+'.png')
+        outCanvas.append(cAux)
+
+    if 'pval_piK' in hDic.keys():
+        print 'Drawing pval_piK'
+        hDic['pval_piK']['data'].GetXaxis().SetTitle('piK p-value')
+        hDic['pval_piK']['data'].GetYaxis().SetTitle('Events')
+        cAux = plot_SingleCategory(CMS_lumi, hDic['pval_piK'], draw_pulls=True, pullsRatio=True, scale_dic=scale_dic,
+                                   addText='Cat. '+catName, logy=False, legBkg=True,
+                                   min_y=1, tag=tag+'pval_piK', legLoc=[0.65, 0.4, 0.9, 0.75])
+        cAux.SaveAs(webFolder+'/pval_piK_'+tag+'.png')
+        outCanvas.append(cAux)
+
+    if 'pval_D0pis' in hDic.keys():
+        print 'Drawing pval_D0pis'
+        hDic['pval_D0pis']['data'].GetXaxis().SetTitle('D0pis p-value')
+        hDic['pval_D0pis']['data'].GetYaxis().SetTitle('Events')
+        cAux = plot_SingleCategory(CMS_lumi, hDic['pval_D0pis'], draw_pulls=True, pullsRatio=True, scale_dic=scale_dic,
+                                   addText='Cat. '+catName, logy=False, legBkg=True,
+                                   min_y=1, tag=tag+'pval_D0pis', legLoc=[0.65, 0.4, 0.9, 0.75])
+        cAux.SaveAs(webFolder+'/pval_D0pis_'+tag+'.png')
+        outCanvas.append(cAux)
 
     if 'B_pt' in hDic.keys():
         print 'Drawing B_pt'
@@ -2098,9 +2132,11 @@ def drawPlots(tag, hDic, catName, scale_dic={}):
     #Re-rolling histos
     unrolledBins = None
     if args.category == 'comb':
-        unrolledBins = pickle.load(open(outdir.replace('comb', catName.lower())+'/unrolledBinsMap.pkl', 'rb'))
+        with open(outdir.replace('comb', catName.lower())+'/unrolledBinsMap.pkl', 'rb') as f:
+            unrolledBins = pickle.load(f)
     else:
-        unrolledBins = pickle.load(open(outdir+'/unrolledBinsMap.pkl', 'rb'))
+        with open(outdir+'/unrolledBinsMap.pkl', 'rb') as f:
+            unrolledBins = pickle.load(f)
     hDic_reRollProj = {}
     for i_q2 in range(len(binning['q2'])-1):
         name2D = 'h2D_q2bin'+str(i_q2)
@@ -2415,7 +2451,7 @@ def drawPlots(tag, hDic, catName, scale_dic={}):
     print 30*'-' + '\n\n'
     return outCanvas
 
-def drawShapeVarPlots(card, tag=''):
+def drawShapeVarPlots(card, args, tag=''):
     print '-----> Creating shape variations plots for', card
 
     plotsDir = webFolder + '/shapeVariations' + tag
@@ -2428,9 +2464,9 @@ def drawShapeVarPlots(card, tag=''):
         region = os.path.basename(fn).replace(card+'_', '').replace('.root', '')
         if region.startswith('h2D'):
             continue
-        if len(args.shapeVarRegions) > 0:
+        if len(args.shape_var_regions) > 0:
             toBePrinted = False
-            for pattern in args.shapeVarRegions:
+            for pattern in args.shape_var_regions:
                 if re.match(pattern, region):
                     toBePrinted = True
                     break
@@ -2443,11 +2479,10 @@ def drawShapeVarPlots(card, tag=''):
         os.system('cp {d}/../index.php {d}/'.format(d=auxOut))
 
         tfile = rt.TFile.Open(fn, 'READ')
-        keys = []
-        for k in tfile.GetListOfKeys():
-            keys.append(k.GetName())
 
-        processes = [k for k in keys if not '__' in k and not k == 'data_obs']
+        keys = [k.GetName() for k in tfile.GetListOfKeys()]
+
+        processes = [k for k in keys if not '__' in k and k != 'data_obs']
         for p in processes:
             hCentral = tfile.Get(p).Clone('hCentral')
             hCentral.SetTitle('Central')
@@ -2459,7 +2494,7 @@ def drawShapeVarPlots(card, tag=''):
 
             shapeVarNames = []
             for k in keys:
-                if (k.startswith(p + '__') or p=='total') and k.endswith('Up'):
+                if (k.startswith(p + '__') or p == 'total') and k.endswith('Up'):
                     shapeVarNames.append(k.split('__')[1][:-2])
             shapeVarNames = list(np.sort(np.unique(shapeVarNames)))
 
@@ -2470,7 +2505,8 @@ def drawShapeVarPlots(card, tag=''):
                     hDown = hCentral.Clone('hDown')
                     hDown.Reset()
                     for pp in processes:
-                        if pp=='total': continue
+                        if pp == 'total':
+                            continue
                         scale = SM_RDst if pp == 'tau' else 1.
                         if pp+'__'+sVar+'Up' in keys:
                             hUp.Add(tfile.Get(pp+'__'+sVar+'Up'), scale)
@@ -2634,10 +2670,7 @@ def drawPrePostFitComparison(histoPre, histoPost, tag=''):
 
     return outCanvas
 
-########################### -------- Create the card ------------------ #########################
-
-def createSingleCard(histo, category, fitRegionsOnly=False):
-
+def createSingleCard(histo, category, args, fitRegionsOnly=False):
     processes = processOrder
     nProc = len(processes)
 
@@ -2646,11 +2679,11 @@ def createSingleCard(histo, category, fitRegionsOnly=False):
         if c.startswith('h2'): continue
         if fitRegionsOnly:
             if c.startswith('ctrl_'):
-                if not c[5:] in args.controlRegions:
+                if not c[5:] in args.control_regions:
                     continue
-            if args.signalRegProj1D:
-                aux = c.startswith(args.signalRegProj1D)
-            elif args.useMVA:
+            if args.signal_reg_proj_1d:
+                aux = c.startswith(args.signal_reg_proj_1d)
+            elif args.use_mva:
                 aux = c.startswith('MVA')
             else:
                 aux = c.startswith('Unrolled')
@@ -2659,7 +2692,7 @@ def createSingleCard(histo, category, fitRegionsOnly=False):
                 continue
             if (not args.unblinded) and (c.endswith('_q2bin2') or c.endswith('_q2bin3')):
                 continue
-            if args.noLowq2 and (c.endswith('_q2bin0') or c.endswith('_q2bin1')):
+            if args.no_low_q2 and (c.endswith('_q2bin0') or c.endswith('_q2bin1')):
                 continue
         categories.append(c)
     nCat = len(categories)
@@ -2743,7 +2776,8 @@ def createSingleCard(histo, category, fitRegionsOnly=False):
 
     #### Branching ratio uncertainty
     brPklLoc = '/storage/af/group/rdst_analysis/BPhysics/data/forcedDecayChannelsFactors_v2.pickle'
-    decayBR = pickle.load(open(brPklLoc, 'rb'))
+    with open(brPklLoc, 'rb') as f:
+        decayBR = pickle.load(f)
 
     def brScaleSys(name, relevantProcesses=[], relUnc=0.01):
         val = ' {:.2f}'.format(1+relUnc)
@@ -2755,7 +2789,7 @@ def createSingleCard(histo, category, fitRegionsOnly=False):
                 aux += ' -'
         return name + ' lnN' + aux*nCat + '\n'
 
-    if args.freeMuBr:
+    if args.free_mu_br:
         pass
         # card += 'mutauNorm rateParam * tau 1. 0.9,1.1\n'
         # card += 'mutauNorm rateParam * mu 1. 0.9,1.1\n'
@@ -2770,10 +2804,10 @@ def createSingleCard(histo, category, fitRegionsOnly=False):
     card += brScaleSys('DdMuBr', ['Bd_DstDd', 'Bu_DstDd'], relUnc=2.7/158.8)
     card += brScaleSys('DsMuBr', ['Bd_DstDs', 'Bs_DstDs'], relUnc=2.1/75.4)
 
-    card += brScaleSys('Bd_DDs1Br', ['Bd_DDs1'], relUnc=1.) #They have not been observed so we variate them alltogether like this
-    card += brScaleSys('Bu_DDs1Br', ['Bu_DDs1'], relUnc=1.) #They have not been observed so we variate them alltogether like this
-
-    card += brScaleSys('B_DstDXXBr', ['B_DstDXX'], relUnc=1.) #They have not been observed so we variate them alltogether like this
+    # They have not been observed so we variate them alltogether like this
+    card += brScaleSys('Bd_DDs1Br', ['Bd_DDs1'], relUnc=1.)
+    card += brScaleSys('Bu_DDs1Br', ['Bu_DDs1'], relUnc=1.)
+    #card += brScaleSys('B_DstDXXBr', ['B_DstDXX'], relUnc=1.)
 
     card += 60*'-'+'\n'
 
@@ -2782,10 +2816,12 @@ def createSingleCard(histo, category, fitRegionsOnly=False):
     ######################################################
     mcProcStr = ''
     for p in processes:
-        if 'data' in p: mcProcStr += ' -'
-        else: mcProcStr += ' 1.'
+        if 'data' in p:
+            mcProcStr += ' -'
+        else:
+            mcProcStr += ' 1.'
 
-    if args.beamSpotCalibration:
+    if args.beamspot_calibration:
         for ax in ['x', 'y']:
             card += category.name+'BS'+ax+' shape' + mcProcStr*nCat + '\n'
 
@@ -2794,7 +2830,7 @@ def createSingleCard(histo, category, fitRegionsOnly=False):
     for k in histo.values()[0].keys():
         if k.startswith(processOrder[0]+'__'+nameSF + '_pt') and k.endswith('Up'):
             n = k[k.find('__')+2:-2]
-            card += n+' shape' + mcProcStr*nCat + '\n'
+            card += n + ' shape' + mcProcStr*nCat + '\n'
             counter += 1
 
     # card += 'muonIdSF shape' + ' 1.'*nProc*nCat + '\n'
@@ -2804,9 +2840,10 @@ def createSingleCard(histo, category, fitRegionsOnly=False):
     for c in categories:
         if c.startswith('ctrl_'):
             aux += mcProcStr
-        else: aux += ' -'*nProc
+        else:
+            aux += ' -'*nProc
     if '1.' in aux:
-        auxTag = '' if args.correlate_tkPVfrac else category.name
+        auxTag = '' if args.correlate_tk_pv_frac else category.name
         card += 'randTksPV'+auxTag+' shape' + aux + '\n'
         card += 'randTksPU'+auxTag+' shape' + aux + '\n'
 
@@ -2827,6 +2864,42 @@ def createSingleCard(histo, category, fitRegionsOnly=False):
 
     card += 'ctrl shape' + mcProcStr*nCat + '\n'
 
+    aux_x = ''
+    aux_y = ''
+    aux_z = ''
+    for c in categories:
+        for p in processes:
+            if 'data' in p:
+                aux_x += ' -'
+                aux_y += ' -'
+                aux_z += ' -'
+            else:
+                if histo[c]['%s__PV_xUp' % p].Integral() <= 1e-1:
+                    # FIXME: hack because when we rebin using the smeared
+                    # primary vertex, occasionally some processes with a
+                    # very small contribution lose the only entry in the
+                    # histogram which causes combine to complain because a
+                    # shape uncertainty histogram has an integral of 0.
+                    aux_x += ' -'
+                else:
+                    aux_x += ' 1.'
+
+                if histo[c]['%s__PV_yUp' % p].Integral() <= 1e-1:
+                    aux_y += ' -'
+                else:
+                    aux_y += ' 1.'
+
+                if histo[c]['%s__PV_zUp' % p].Integral() <= 1e-1:
+                    aux_z += ' -'
+                else:
+                    aux_z += ' 1.'
+
+    # Smearing of primary vertex position
+    if not args.freeze_pv:
+        card += 'PV_x shape %s\n' % aux_x
+        card += 'PV_y shape %s\n' % aux_y
+        card += 'PV_z shape %s\n' % aux_z
+
     # B eta uncertainty
     names = []
     for k in histo.values()[0].keys():
@@ -2837,7 +2910,7 @@ def createSingleCard(histo, category, fitRegionsOnly=False):
         if ii == 2: break
 
     # B pT uncertainty
-    if not args.calBpT == 'none':
+    if args.cal_b_pt:
         # Bd pT spectrum
         aux = ''
         for p in processes:
@@ -2854,15 +2927,17 @@ def createSingleCard(histo, category, fitRegionsOnly=False):
 
 
     # Form Factors from Hammer
-    if not args.freezeFF:
-        for n_pFF in FreeParFF:
+    if not args.freeze_ff:
+        for n_pFF in FreeParFF[args.ff_scheme]:
             aux = ''
             for p in processes:
                 if p in ['tau', 'mu']:
+                    # FIXME: Assume that the form factor histograms are 2 sigma
+                    # away. Need to double check this.
                     aux += ' 0.5'
                 else:
                     aux += ' -'
-            card += 'B2Dst'+schemeFF+'{} shape'.format(n_pFF) + aux*nCat + '\n'
+            card += 'B2Dst'+args.ff_scheme+'{} shape'.format(n_pFF) + aux*nCat + '\n'
 
 
     aux = ''
@@ -2934,7 +3009,7 @@ def createSingleCard(histo, category, fitRegionsOnly=False):
                 shapeNames.append('br'+nnn+'_'+str(proc_id))
         card += brShapeSys([nnn], shapeNames)
 
-    card += brShapeSys(['B_DstDXX'], ['Bu_DstDXX_frac'])
+    #card += brShapeSys(['B_DstDXX'], ['Bu_DstDXX_frac'])
 
 
 
@@ -2944,22 +3019,22 @@ def createSingleCard(histo, category, fitRegionsOnly=False):
     ########## MC statistical uncertainties
     ######################################################
 
-    if not args.noMCstats:
-        for r in args.controlRegions:
+    if not args.no_mc_stats:
+        for r in args.control_regions:
             card += 'ctrl_'+r+' autoMCStats 0 1 1\n'
 
-        if args.useMVA:
+        if args.use_mva:
             card += 'MVA autoMCStats 2 1 1\n'
         else:
-            if args.signalRegProj1D:
-                if not args.noLowq2:
-                    card += args.signalRegProj1D+'_q2bin0 autoMCStats 0 1 1\n'
-                    card += args.signalRegProj1D+'_q2bin1 autoMCStats 0 1 1\n'
+            if args.signal_reg_proj_1d:
+                if not args.no_low_q2:
+                    card += args.signal_reg_proj_1d+'_q2bin0 autoMCStats 0 1 1\n'
+                    card += args.signal_reg_proj_1d+'_q2bin1 autoMCStats 0 1 1\n'
                 if args.unblinded:
-                    card += args.signalRegProj1D+'_q2bin2 autoMCStats 0 1 1\n'
-                    card += args.signalRegProj1D+'_q2bin3 autoMCStats 0 1 1\n'
+                    card += args.signal_reg_proj_1d+'_q2bin2 autoMCStats 0 1 1\n'
+                    card += args.signal_reg_proj_1d+'_q2bin3 autoMCStats 0 1 1\n'
             else:
-                if not args.noLowq2:
+                if not args.no_low_q2:
                     card += 'Unrolled_q2bin0 autoMCStats 0 1 1\n'
                     card += 'Unrolled_q2bin1 autoMCStats 0 1 1\n'
                 if args.unblinded:
@@ -2972,18 +3047,18 @@ def createSingleCard(histo, category, fitRegionsOnly=False):
     ########## Scorrelate systematics
     ######################################################
 
-    signalChannel = args.signalRegProj1D if args.signalRegProj1D else 'Unrolled'
+    signalChannel = args.signal_reg_proj_1d if args.signal_reg_proj_1d else 'Unrolled'
 
-    # card += 'nuisance edit drop * * B2Dst'+schemeFF +'.* ifexists\n'
+    # card += 'nuisance edit drop * * B2Dst'+args.ff_scheme +'.* ifexists\n'
 
     # Relax prior increasing width by a factor 2
-    # card += 'nuisance edit add * * B2Dst'+schemeFF +'.* shape 0.5 overwrite\n'
+    # card += 'nuisance edit add * * B2Dst'+args.ff_scheme +'.* shape 0.5 overwrite\n'
 
-    if args.decorrelateFFpars:
-        for n in FreeParFF:
+    if args.decorrelate_ff_pars:
+        for n in FreeParFF[args.ff_scheme]:
             if n == 'R0':
                 continue
-            parName = 'B2Dst'+schemeFF+n
+            parName = 'B2Dst'+args.ff_scheme+n
             card += 'nuisance edit rename * ' + signalChannel+'_q2bin[01] ' + parName + ' ' + parName+'_ctrlReg'+category.name+'\n'
             card += 'nuisance edit rename * ctrl_.* ' + parName + ' ' + parName+'_ctrlReg'+category.name+'\n'
             card += 'nuisance edit rename * ' + signalChannel+'_q2bin[23] ' + parName + ' ' + parName+'_sigReg'+category.name+'\n'
@@ -2993,9 +3068,9 @@ def createSingleCard(histo, category, fitRegionsOnly=False):
 
     return card
 
-def createCombinationCard(fitRegionsOnly=False):
+def createCombinationCard(args, fitRegionsOnly=False):
     clFull = card_location.replace('.txt', '_fitRegionsOnly.txt') if fitRegionsOnly else card_location
-    cmd = 'cd '+os.path.dirname(clFull)+'; '
+    cmd = 'cd '+dirname(clFull)+'; '
     cl = os.path.basename(clFull)
     cmd += 'combineCards.py'
     for c in categoriesToCombine:
@@ -3003,8 +3078,8 @@ def createCombinationCard(fitRegionsOnly=False):
         nWait = 0
         while not os.path.isfile(singleCatCardLoc):
             if nWait > 10:
-                print '[ERROR] Waited too long...goodbye.'
-                raise
+                print >> sys.stderr, '[ERROR] Waited too long...goodbye.'
+                sys.exit(1)
             print 'Waiting for {} card to be produced'.format(c)
             time.sleep(60)
             nWait += 1
@@ -3023,12 +3098,12 @@ def createCombinationCard(fitRegionsOnly=False):
         if not line.startswith('nuisance edit'):
             cardStream.write(line)
     # Re-write them down
-    if args.decorrelateFFpars:
-        signalChannel = args.signalRegProj1D if args.signalRegProj1D else 'Unrolled'
-        for n in FreeParFF:
+    if args.decorrelate_ff_pars:
+        signalChannel = args.signal_reg_proj_1d if args.signal_reg_proj_1d else 'Unrolled'
+        for n in FreeParFF[args.ff_scheme]:
             if n == 'R0':
                 continue
-            parName = 'B2Dst'+schemeFF+n
+            parName = 'B2Dst'+args.ff_scheme+n
             for c in categoriesToCombine:
                 chName = c + '_' + signalChannel+'_q2bin[01]'
                 cardStream.write('nuisance edit rename * ' + chName + ' ' + parName + ' ' + parName+'_ctrlReg'+c.capitalize()+'\n')
@@ -3040,9 +3115,6 @@ def createCombinationCard(fitRegionsOnly=False):
 
     cardStream.close()
 
-
-########################### -------- Create the workspace ------------------ #########################
-
 def createWorkspace(cardLoc):
     print '-----> Creating workspace'
     print cardLoc
@@ -3052,18 +3124,13 @@ def createWorkspace(cardLoc):
     # cmd += ' --no-wrappers'
     output = runCommandSafe(cmd)
 
-    text_file = open(cardLoc.replace('.txt', '_text2workspace.out'), 'w')
-    text_file.write(output)
-    text_file.close()
+    with open(cardLoc.replace('.txt', '_text2workspace.out'), 'w') as f:
+        f.write(output)
 
-    text_file = open(webFolder + '/' + os.path.basename(cardLoc).replace('.txt', '_text2workspace.out'), 'w')
-    text_file.write(output)
-    text_file.close()
+    with open(webFolder + '/' + os.path.basename(cardLoc).replace('.txt', '_text2workspace.out'), 'w') as f:
+        f.write(output)
 
-########################### -------- Bias studies ------------------ #########################
-
-def biasToysScan(card, out, seed=1, nToys=10, rVal=SM_RDst, maskStr=''):
-
+def biasToysScan(card, out, args, seed=1, nToys=10, rVal=SM_RDst, maskStr=''):
     if not args.asimov:
         inputSpace = 'higgsCombineBestfit.MultiDimFit.mH120.root'
         if not os.path.isfile(os.path.join(out, inputSpace)):
@@ -3085,8 +3152,6 @@ def biasToysScan(card, out, seed=1, nToys=10, rVal=SM_RDst, maskStr=''):
         print 'Using r best fit value {:.4f}'.format(rVal)
     else:
         inputSpace = card.replace('.txt', '.root')
-
-
 
     print '-----> Generating toys (seed: {})'.format(seed)
     cmd = 'cd ' + out + '; '
@@ -3209,9 +3274,6 @@ def collectBiasToysResults(scansLoc, rVal=SM_RDst):
             c = drawOnCMSCanvas(CMS_lumi, [h])
             c.SaveAs(webFolderBias + '/bestFitDistribution_'+n+'.png')
 
-
-########################### -------- Likelihood scan ------------------ #########################
-
 def dumpNuisFromScan(tag, out):
     print 'Dumping nuisances'
     name = out+'higgsCombine{}.MultiDimFit.mH120.root'.format(tag)
@@ -3250,8 +3312,7 @@ def dumpNuisFromScan(tag, out):
     textPave.SetY2NDC(0.95)
     cAux.SaveAs(webFolder+'/scanNuisanceOut_'+tag+'_distribution.png')
 
-
-def runScan(tag, card, out, catName, rVal=SM_RDst, rLimits=[0.1, 0.7], nPoints=30, maskStr='', strategy=1, freezePars=[], draw=True, dumpNuis=False):
+def runScan(tag, card, out, catName, args, rVal=SM_RDst, rLimits=[0.1, 0.7], nPoints=30, maskStr='', strategy=1, freezePars=[], draw=True, dumpNuis=False):
     if not out[-1] == '/': out += '/'
     cmd = 'cd ' + out + '; '
     cmd += 'combine -M MultiDimFit'
@@ -3271,16 +3332,20 @@ def runScan(tag, card, out, catName, rVal=SM_RDst, rLimits=[0.1, 0.7], nPoints=3
         cmd += ' --freezeParameters ' + ','.join(freezePars)
     cmd += ' --trackParameters rgx{.*}'
     cmd += ' -n ' + tag
-    cmd += ' --verbose -1'
+    cmd += ' --verbose 1'
     output = runCommandSafe(cmd)
     if args.verbose:
         print output
+
+    with open(join(webFolder,'scan_output.txt'), 'a') as f:
+        f.write(output)
 
     if dumpNuis:
         dumpNuisFromScan(tag, out)
 
     if draw:
-        json.dump({'r': 'R(D*)'}, open(out+'renameDicLikelihoodScan.json', 'w'))
+        with open(out+'renameDicLikelihoodScan.json', 'w') as f:
+            json.dump({'r': 'R(D*)'}, f)
 
         cmd = 'cd ' + out + '; '
         cmd += '../../plot1DScan.py higgsCombine{t}.MultiDimFit.mH120.root -o scan{t}'.format(t=tag)
@@ -3303,12 +3368,9 @@ def runScan(tag, card, out, catName, rVal=SM_RDst, rLimits=[0.1, 0.7], nPoints=3
         if res[8] is not None:
             strRes += ' (Upper lims: {:.3f}, {:.3f})'.format(res[8], res[9])
         dumpFile.write(strRes + '\n')
-    if args.showPlots:
+    if args.show_plots:
         display(Image(filename=out+'/scan'+tag+'.png'))
     return rValOur, rLimitsOut
-
-
-########################### -------- Categories compatibility -------- #########################
 
 def categoriesCompatibility(card, out, rVal=SM_RDst, rLimits=[0.1, 0.7]):
     fLog = open(webFolder + '/categoriesCompatibility.txt', 'w')
@@ -3331,9 +3393,8 @@ def categoriesCompatibility(card, out, rVal=SM_RDst, rLimits=[0.1, 0.7]):
     print '----- Creating workspace with independent signal strength'
     wsLoc = card.replace('.txt', '_rCat.root')
     if not card.endswith('.txt'):
-        print 'categoriesCompatibility needs txt card input.'
         print card
-        raise
+        raise Exception("categoriesCompatibility needs txt card input.")
     cmd = 'text2workspace.py ' + card
     cmd += ' -o ' + wsLoc
     cmd += ' -P HiggsAnalysis.CombinedLimit.PhysicsModel:multiSignalModel'
@@ -3389,14 +3450,13 @@ def categoriesCompatibility(card, out, rVal=SM_RDst, rLimits=[0.1, 0.7]):
 
     return
 
-########################### -------- Fit Diagnostic ------------------ #########################
-def defineChannelMasking(histo):
-    visibleChannels = ['ctrl_'+r for r in args.controlRegions]
-    if args.useMVA:
+def defineChannelMasking(histo, args):
+    visibleChannels = ['ctrl_'+r for r in args.control_regions]
+    if args.use_mva:
         visibleChannels += ['MVA']
     else:
-        fitVar = args.signalRegProj1D if args.signalRegProj1D else 'Unrolled'
-        if not args.noLowq2:
+        fitVar = args.signal_reg_proj_1d if args.signal_reg_proj_1d else 'Unrolled'
+        if not args.no_low_q2:
             visibleChannels += [fitVar+'_q2bin0', fitVar+'_q2bin1']
         if args.unblinded:
             visibleChannels += [fitVar+'_q2bin2', fitVar+'_q2bin3']
@@ -3459,7 +3519,7 @@ def runFitDiagnostic(tag, card, out, forceRDst=False, maskStr='', rVal=SM_RDst, 
             print '[ERROR] Limit output format not recognized'
             print arr['limit']
 
-def getPostfitHistos(tag, out, forceRDst, histo_prefit):
+def getPostfitHistos(tag, out, forceRDst, histo_prefit, args):
     runName = tag + ('_RDstFixed' if forceRDst else '')
 
     # Get post-fit shapes
@@ -3647,14 +3707,11 @@ def nuisancesDiff(tag, out, forceRDst):
 
     return
 
-
-########################### -------- Uncertainty breakdown ------------------ #########################
-
-def runUncertaintyBreakDownScan(card, out, catName, rVal=SM_RDst, rLimits=[0.1, 0.7], maskStr=''):
+def runUncertaintyBreakDownScan(card, out, catName, args, rVal=SM_RDst, rLimits=[0.1, 0.7], maskStr=''):
     if not out[-1] == '/': out += '/'
     print '--------> Running uncertainty breakdown <--------------'
     print '--------> Nominal scan'
-    rValOut, rLimitsOut = runScan('Nominal', card, out, catName, rVal, rLimits, nPoints=150, maskStr=maskStr, strategy=args.scanStrategy, draw=False)
+    rValOut, rLimitsOut = runScan('Nominal', card, out, catName, args, rVal, rLimits, nPoints=150, maskStr=maskStr, strategy=args.scan_strategy, draw=False)
     sig = (rLimitsOut[1] - rValOut)/3
     rLimitsTight = [rValOut - 2*sig, rValOut + 2*sig]
 
@@ -3704,7 +3761,8 @@ def runUncertaintyBreakDownScan(card, out, catName, rVal=SM_RDst, rLimits=[0.1, 
     getUncertaintyFromLimitTree(out + 'higgsCombineMCstat.MultiDimFit.mH120.root')
 
 
-    json.dump({'r': 'R(D*)'}, open(out+'renameDicLikelihoodScan.json', 'w'))
+    with open(out+'renameDicLikelihoodScan.json', 'w') as f:
+        json.dump({'r': 'R(D*)'}, f)
 
     cmd = 'cd ' + out + '; '
     cmd += 'python ../../plot1DScan.py higgsCombineNominal.MultiDimFit.mH120.root'
@@ -3722,12 +3780,10 @@ def runUncertaintyBreakDownScan(card, out, catName, rVal=SM_RDst, rLimits=[0.1, 
     cmd += '; cp {}scanBreakdown.pdf {}/'.format(out, webFolder)
     status, output = commands.getstatusoutput(cmd)
     runCommandSafe(cmd)
-    if args.showPlots:
+    if args.show_plots:
         display(Image(filename=out+'scanBreakdown.png'))
 
-
-
-def runUncertaintyBreakDownTable(card, out, catName, rVal=SM_RDst, rLimits=[0.1, 0.7], maskStr=''):
+def runUncertaintyBreakDownTable(card, out, catName, args, rVal=SM_RDst, rLimits=[0.1, 0.7], maskStr=''):
     print '--------> Running uncertainty breakdown <--------------'
     if not out[-1] == '/':
         out += '/'
@@ -3784,8 +3840,7 @@ def runUncertaintyBreakDownTable(card, out, catName, rVal=SM_RDst, rLimits=[0.1,
             res = getUncertaintyFromLimitTree(out + 'higgsCombine_'+tag+'.MultiDimFit.mH120.root', verbose=False, drawPlot=False)
             r, rDown, rUp = res[0], res[5], res[6]
         else:
-            print 'Type not recognised'
-            raise
+            raise Exception("Type not recognised")
         uncRemaining.append(0.5*(rUp-rDown))
         uncNames.append(tag)
         uncAss.append(np.sqrt(uncRemaining[-2]**2 - uncRemaining[-1]**2))
@@ -3818,11 +3873,11 @@ def runUncertaintyBreakDownTable(card, out, catName, rVal=SM_RDst, rLimits=[0.1,
     print ' '
 
     groupsDefFile = os.path.join(basedir, 'Combine/uncertaintyBreakdownTableGroups.yml')
-    groups = yaml.load(open(groupsDefFile, 'r'))
+    groups = load_yaml(groupsDefFile)
     frozenNuisance = []
     firstToRun = ''
     for ig, group in enumerate(groups):
-        if args.freezeFF and group['tag'] == 'formFactors':
+        if args.freeze_ff and group['tag'] == 'formFactors':
             continue
         print '----> Freezing ' + group['tag']
         frozenNuisance += group['nuisance']
@@ -3907,9 +3962,6 @@ def runUncertaintyBreakDownTable(card, out, catName, rVal=SM_RDst, rLimits=[0.1,
     fTable.close()
 
     return
-
-
-########################### -------- Externalize parameters ------------------ #########################
 
 def externalizeUncertainty(card, out, parameters=['B2DstCLNeig1', 'B2DstCLNeig2', 'B2DstCLNeig3'], center='preFit', sigma=1, tag='FF', rVal=SM_RDst, rLimits=[0.1, 0.7]):
     tag += '_center' + center
@@ -4002,9 +4054,6 @@ def externalizeUncertainty(card, out, parameters=['B2DstCLNeig1', 'B2DstCLNeig2'
     fLog.write(s + '\n')
     fLog.close()
     return
-
-
-########################### -------- Nuisances impact ------------------ #########################
 
 def runNuisanceImpacts(card, out, catName, maskStr='', rVal=SM_RDst, submit=True, collect=True):
     if not out[-1] == '/': out += '/'
@@ -4110,7 +4159,8 @@ def runNuisanceImpacts(card, out, catName, maskStr='', rVal=SM_RDst, submit=True
         }
         for n in procName_dic: rename[n+'Br'] = 'Br. frac. ' + procName_dic[n]
 
-        d = json.load(open(out+'impactPlots/impacts.json', 'r'))
+        with open(out+'impactPlots/impacts.json', 'r') as f:
+            d = json.load(f)
         for par in d['params']:
             name = str(par['name'])
             if name.startswith('prop_bin'):
@@ -4125,7 +4175,8 @@ def runNuisanceImpacts(card, out, catName, maskStr='', rVal=SM_RDst, submit=True
                 idx = name.find('_pt')
                 label += ' bin ' + name[idx+3:]
                 rename[name] = label
-        json.dump(rename, open(out+'impactPlots/rename.json', 'w'))
+        with open(out+'impactPlots/rename.json', 'w') as f:
+            json.dump(rename, f)
 
         cmd = 'cd {};'.format(out)
         cmd += 'plotImpacts.py -i impactPlots/impacts.json -o impacts -t impactPlots/rename.json --max-pages 1'
@@ -4139,7 +4190,6 @@ def runNuisanceImpacts(card, out, catName, maskStr='', rVal=SM_RDst, submit=True
         cmd = 'cp {}impacts_full.pdf {}/'.format(out, webFolder)
         runCommandSafe(cmd)
 
-########################### -------- Goodness of Fit ------------------ #########################
 def runCommand(input_args):
     i, cmd = input_args
     print 'Start', i
@@ -4148,7 +4198,7 @@ def runCommand(input_args):
     print 'Done {} in {:.1f} min'.format(i, (time.time() - st)/60.0 )
     return [status, output]
 
-def runGoodnessOfFit(tag, card, out, algo, maskEvalGoF='', fixRDst=False, rVal=SM_RDst):
+def runGoodnessOfFit(tag, card, out, algo, args, maskEvalGoF='', fixRDst=False, rVal=SM_RDst):
     # Always to be tun with fitRegionsOnly cards
     tag += '_algo'+algo
     if fixRDst:
@@ -4181,11 +4231,11 @@ def runGoodnessOfFit(tag, card, out, algo, maskEvalGoF='', fixRDst=False, rVal=S
 
     # Run the test stat toy distribution
     cmdToys = cmd.replace('-n Obs', '-n Toys')
-    nToysPerRep = 40 if args.runInJob else 5
+    nToysPerRep = 40 if args.run_in_job else 5
     cmdToys = cmdToys.replace('-t 0 -s 100', '-t {} -s -1'.format(nToysPerRep))
     print cmdToys
 
-    nRep = 5 if args.runInJob else 20
+    nRep = 5 if args.run_in_job else 20
     p = Pool(min(20,nRep))
     outputs = p.map(runCommand, [[i, cmdToys] for i in range(nRep)])
     for s,o in outputs:
@@ -4224,72 +4274,188 @@ def runGoodnessOfFit(tag, card, out, algo, maskEvalGoF='', fixRDst=False, rVal=S
         dumpFile.write(strRes + '\n')
     os.system('echo "{}" >> {}GoF_results.txt'.format(strRes, out));
 
-
-########################### -------- Condor submissions ------------------ #########################
-# Check for the right singularity using: ll /cvmfs/singularity.opensciencegrid.org/cmssw/
-mem = '7500'
-if 'histos' in args.step or args.useMVA:
-    mem = '16000'
-elif args.category == 'comb' and 'fitDiag' in args.step:
-    mem = '16000'
-jdlTemplate = '\n'.join([
-              'executable        = '+basedir+'Combine/condorJob.sh',
-              'arguments         = {arguments}',
-              'output            = {outdir}/job_{jN}_$(ClusterId).out',
-              'error             = {outdir}/job_{jN}_$(ClusterId).err',
-              'log               = {outdir}/job_{jN}_$(ClusterId).log',
-              'JobPrio           = -1',
-              'WHEN_TO_TRANSFER_OUTPUT = ON_EXIT_OR_EVICT',
-              '+MaxRuntime       = 1200',
-              '+JobQueue         = ' + ('"Normal"' if ('fitDiag' in args.step or args.category == 'comb') else '"Short"'),
-              '+RunAsOwner       = True',
-              '+InteractiveUser  = True',
-              '+SingularityImage = "/cvmfs/singularity.opensciencegrid.org/cmssw/cms:rhel7"',
-              '+SingularityBindCVMFS = True',
-              'run_as_owner      = True',
-              'RequestDisk       = 15000000', #KB
-              'RequestMemory     = ' + mem, #MB
-              'RequestCpus       = {:.0f}'.format(np.ceil(float(mem)/4000)),
-              'x509userproxy     = $ENV(X509_USER_PROXY)',
-              'on_exit_remove    = (ExitBySignal == False) && (ExitCode == 0)',
-              'on_exit_hold      = (ExitBySignal == True) || (ExitCode != 0)',
-              # 'periodic_release  =  (NumJobStarts < 2) && ((CurrentTime - EnteredCurrentStatus) > (60*5))',
-              '+PeriodicRemove   = ((JobStatus =?= 2) && ((MemoryUsage =!= UNDEFINED && MemoryUsage > 5*RequestMemory)))',
-              # 'max_retries       = 3',
-              'requirements      = Machine =!= LastRemoteHost',
-              'universe          = vanilla',
-              'queue 1',''])
-
-def submitRunToCondor():
+def submitRunToCondor(args):
     jobDir = outdir + '/condor'
     if not os.path.exists(jobDir):
         os.makedirs(jobDir)
 
     jN = 0
-    for name in glob(jobDir + '/job_*.jdl'):
-        n = os.path.basename(name)
-        jN = max(jN, int(n[4:-4])+1)
-    jN = str(jN)
+    for path in glob('%s/job_*.jdl' % jobDir):
+        filename = os.path.basename(path)
+        root, ext = os.path.splitext(filename)
+        number = int(root.split("_")[1])
+        jN = max(jN, number+1)
 
     arguments = os.environ['PWD'] + ' '
-    arguments += ' '.join(sys.argv).replace(' --submit', ' --runInJob')
+    arguments += ' '.join(sys.argv).replace(' --submit', ' --run-in-job')
 
-    job = jdlTemplate.format(outdir=jobDir, arguments=arguments, jN=jN)
-    with open(jobDir+'/job_'+jN+'.jdl', 'w') as fsub:
+    environment = '"BPH_RD_ANALYSIS=%s"' % os.path.join(os.environ['HOME'],'RDstAnalysis/BPH_RD_Analysis')
+    mem = 7500
+    cpus = np.ceil(float(mem)/4000)
+
+    if 'fitDiag' in args.step or args.category == 'comb':
+        jobqueue = '"Normal"'
+    else:
+        jobqueue = '"Short"'
+
+    job = CONDOR_TEMPLATE.format(basedir=basedir, environment=environment, arguments=arguments, outdir=jobDir, jobqueue=jobqueue, mem=mem, cpus=cpus, jN=jN)
+
+    with open('%s/job_%i.jdl' % (jobDir,jN), 'w') as fsub:
         fsub.write(job)
 
-    cmd = 'cd '+jobDir+'; condor_submit job_'+jN+'.jdl'
-    cmd += ' -batch-name ' + card_name + '_jN'+jN
+    cmd = 'cd %s; condor_submit job_%i.jdl' % (jobDir,jN)
+    cmd += ' -batch-name %s_%i' % (card_name,jN)
     runCommandSafe(cmd)
     print 'Jobs submitted'
 
-
-######################################################################################################
-
-
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Script used to run combine on the R(D*) analysis.', epilog='Example: ./runCombine.py -c low', add_help=True)
+    parser.add_argument('-v', '--card-tag', default='test_', help='Card name initial tag.')
+    parser.add_argument('-c', '--category', type=str, default='high', choices=['single', 'low', 'mid', 'high', 'comb'], help='Category.')
+    parser.add_argument('-s', '--skim-tag', default='_no_pval_sel_v2', type=str, help='Tag to append to the skimmed directory.')
+    parser.add_argument('--skim-tag-rd', default=None, type=str, help='Tag to append to the skimmed directory for data.')
+    parser.add_argument('--bare-mc', action='store_true', help='Use bare MC instead of the corrected one.')
+    parser.add_argument('--max-events', default=None, type=int, help='Max number of MC events to load per sample.')
+    parser.add_argument('--cal-b-pt', action='store_true', help='include B pt corrections')
+    parser.add_argument('--ff-scheme', default='CLN', choices=['CLN', 'BLPR', 'NoFF'], help='Form factor scheme to use.')
+    parser.add_argument('--lumi-mult', default=1., type=float, help='Luminosity multiplier for asimov dataset. Only works when running with --asimov.')
+    parser.add_argument('--beamspot-calibration', action='store_true', help='Apply beam spot calibration.')
+
+    parser.add_argument('--use-mva', action='store_true', help='Use MVA in the fit.')
+    parser.add_argument('--b-reco', default='vtx', type=str, choices=['vtx', 'coll', 'prefit'], help='Select reconstruction mode for B.')
+    parser.add_argument('--signal-reg-proj-1d', default='', choices=['M2_miss', 'Est_mu', 'U_miss'], help='Use 1D projections in signal region instead of the unrolled histograms')
+    parser.add_argument('--unblinded', action='store_true', help='Unblind the fit regions.')
+    parser.add_argument('--no-low-q2', action='store_true', help='Mask the low q2 signal regions.')
+    parser.add_argument('--control-regions', default=['p__mHad', 'm__mHad', 'pp_mHad', 'mm_mHad', 'pm_M2miss', 'pm_q2'], help='Control regions to use', nargs='*')
+    parser.add_argument('--cut-mu-ps', action='store_true', help='Restrict phase space. See data loading for more info.')
+
+    parser.add_argument('--correlate-tk-pv-frac', default=False, action='store_true', help='Correlate tkPVfrac in all categories.')
+    parser.add_argument('--freeze-ff', action='store_true', help='Freeze form factors to central value.')
+    parser.add_argument('--free-mu-br', default=True, help='Make muon branching fraction with a rate parameter (flat prior).')
+    parser.add_argument('--asimov', action='store_true', help='Use Asimov dataset insted of real data.')
+    parser.add_argument('--no-mc-stats', action='store_true', help='Do not include MC stat systematic.')
+
+    parser.add_argument('--dump-weights-tree', action='store_true', help='Dump tree with weights for skimmed events.')
+
+    availableSteps = ['clean', 'histos', 'preFitPlots', 'shapeVarPlots',
+                      'card', 'workspace',
+                      'bias', 'scan', 'catComp',
+                      'fitDiag', 'postFitPlots',
+                      'uncBreakdownScan', 'uncBreakdownTable',
+                      'externalize',
+                      'impacts', 'GoF']
+    defaultPipelineSingle = ['histos', 'preFitPlots', 'card', 'workspace', 'scan', 'GoF', 'fitDiag', 'postFitPlots']
+    defaultPipelineComb = ['preFitPlots', 'card', 'workspace', 'scan', 'catComp', 'uncBreakdownTable', 'GoF', 'fitDiag', 'postFitPlots', 'uncBreakdownScan']
+    # histos preFitPlots shapeVarPlots card workspace scan fitDiag postFitPlots uncBreakdownScan GoF
+    parser.add_argument('--step', type=str, default=[], choices=availableSteps, help='Analysis steps to run.', nargs='+')
+    parser.add_argument('--submit', action='store_true', help='Submit a job instead of running the call interactively.')
+    parser.add_argument('--run-in-job', action='store_true', help='Not for user, reserved to jobs calls.')
+
+    parser.add_argument('--validate-card', action='store_true', help='Run combine card validation.')
+    parser.add_argument('--decorrelate-ff-pars', action='store_true', help='Decorrelte form factors parameters')
+
+    parser.add_argument('--force-rdst', action='store_true', help='Perform fit fixing R(D*) to 0.295')
+    parser.add_argument('--seed', default=6741, type=int, help='Seed used by Combine')
+    parser.add_argument('--rdst-lims', default=[], type=float, help='Initial boundaries for R(D*).', nargs='+')
+
+    # Shape variations options
+    parser.add_argument('--shape-var-regions', default=[], type=str, help='Regions (or regular expression) to be plotted in shape variations.', nargs='*')
+
+    # Bias options
+    parser.add_argument('--run-bias-toys', default=False, action='store_true', help='Only generate toys and run scans for bias, do not collect results.')
+    parser.add_argument('--ntoys', default=10, type=int, help='Number of toys to run')
+    parser.add_argument('--toys-rdst', default=0.295, type=float, help='R(D*) value used to generate the toys.')
+    parser.add_argument('--run-bias-analysis', action='store_true', help='Only analyze bias scans which have been previously produced.')
+
+    # Scan options
+    parser.add_argument('--scan-strategy', default=1, type=int, help='Minimizer strategy for the scan.')
+    parser.add_argument('--mask-scan', type=str, default=[], nargs='+', help='Channels to mask during likelyhood scan. If this list is non empty, the full card is used (default is fitregionsOnly).')
+    parser.add_argument('--scan-tag', type=str, default='')
+    parser.add_argument('--freeze-pars-scan', type=str, default=[], nargs='+')
+
+    # Externalization options
+    parser.add_argument('--extern-pars', default=['B2DstCLNeig1', 'B2DstCLNeig2', 'B2DstCLNeig3'], type=str, help='Parameters to externalize.', nargs='+')
+    parser.add_argument('--extern-sigma', default=1., type=float, help='Externalization sigmas.')
+    parser.add_argument('--extern-tag', default='FF', type=str, help='Externalization tag.')
+    parser.add_argument('--extern-center', default='postFit', type=str, choices=['preFit', 'postFit'], help='Externalization tag.')
+
+    # Impacts options
+    parser.add_argument('--collect-impacts', action='store_true', help='Only collect impact fits which have been previously run')
+    parser.add_argument('--sub-only-impacts', action='store_true', help='Only submit impact fits, do not collect results')
+
+    # Goodness Of Fit options
+    parser.add_argument('--algo-gof', type=str, default=['Sat','KS'], choices=['Sat', 'AD', 'KS'], help='Algorithm to be used for the goodness of fit test', nargs='+')
+    parser.add_argument('--mask-eval-gof', type=str, default=[], nargs='+', help='Additional channels to mask during GoF evaluation')
+    parser.add_argument('--tag-gof', type=str, default='all')
+
+    parser.add_argument('--show-plots', action='store_true', help='Show plots by setting ROOT batch mode OFF (default ON)')
+    parser.add_argument('--show-card', action='store_true', help='Dump card on std outoput')
+    parser.add_argument('--verbose', action='count', default=1)
+    parser.add_argument('--skip-blop', default=True, action='store_true', help='Skip BLOP form factor weights')
+    parser.add_argument('--freeze-pv', action='store_true', help="Don't include primary vertex resolution uncertainties.")
+
+    args = parser.parse_args()
+
+    if args.skim_tag_rd is None:
+        args.skim_tag_rd = args.skim_tag
+
+    if not args.card_tag.endswith('_'):
+        args.card_tag += '_'
+
+    if len(args.step) == 0:
+        if args.category == 'comb':
+            args.step = defaultPipelineComb
+        else: args.step = defaultPipelineSingle
+
+        if args.card_tag == 'test_' and not args.submit and not args.run_in_job:
+            args.step = ['clean'] + args.step
+
+        if not args.unblinded:
+            for s in args.step:
+                if 'uncBreakdown' in s:
+                    args.step.remove(s)
+
+        print 'Running default steps: ' + ', '.join(args.step)
+
+    if not args.show_plots:
+        rt.gROOT.SetBatch(True)
+        plt.ioff()
+        plt.switch_backend('Agg')
+
+    if len(args.rdst_lims) == 2 and args.rdst_lims[1] <= args.rdst_lims[0]:
+        raise Exception("R(D*) upper limit less than lower limit!")
+    elif len(args.rdst_lims) > 2:
+        raise Exception("Too many R(D*) limits!")
+
+    if args.lumi_mult != 1:
+        print 'Multipling the expected luminosity by {:.1f}'.format(args.lumi_mult)
+        for n in expectedLumi.keys():
+            expectedLumi[n] *= args.lumi_mult
+        print expectedLumi
+
+    if args.asimov:
+        CMS_lumi.extraText = "     Simulation Preliminary"
+
+    card_name = createCardName(args)
+    print 'Card name:', card_name
+    print 'Control regions:', ' '.join(args.control_regions)
+
+    outdir = join(basedir,'Combine/results/',card_name)
+    if not os.path.isdir(outdir):
+        os.system('mkdir -p %s/fig' % outdir)
+    card_location = join(basedir,'Combine/cards/{}.txt'.format(card_name))
+    histo_file_dir = join(basedir,'data/_root/histos4combine/')
+
+    userName = basedir[basedir.find('/user/')+6:].split('/')[0]
+    webFolder = '/storage/af/user/%s/public_html/BPH_RDst/Combine/%s' % (userName,card_name)
+    if not os.path.isdir(webFolder):
+        os.makedirs(webFolder)
+        os.system('cp %s/../index.php %s' % (webFolder,webFolder))
+
     if args.submit:
-        submitRunToCondor()
+        submitRunToCondor(args)
         exit()
 
     if 'clean' in args.step:
@@ -4297,16 +4463,18 @@ if __name__ == "__main__":
         cleanPreviousResults()
         args.step.remove('clean')
 
-    dumpCallAndGitStatus()
+    dumpCallAndGitStatus(args)
 
     if 'histos' in args.step:
         if args.category == 'comb':
             print 'Histo should be created ahead running single categories'
         else:
-            createHistograms(categoriesDef[args.category])
+            createHistograms(categoriesDef[args.category], args)
         args.step.remove('histos')
 
-    if not args.step: exit()
+    if not args.step:
+        exit()
+
     print '-----> Loading histograms'
     histo = None
     if args.category == 'comb':
@@ -4334,9 +4502,9 @@ if __name__ == "__main__":
         if args.category == 'comb':
             cPre = {}
             for c in categoriesToCombine:
-                cPre[c] = drawPlots('prefit'+c.capitalize(), histo[c], c.capitalize(), scale_dic={'tau': SM_RDst})
+                cPre[c] = drawPlots('prefit'+c.capitalize(), histo[c], c.capitalize(), args, scale_dic={'tau': SM_RDst})
         else:
-            cPre = drawPlots('prefit', histo, args.category.capitalize(), scale_dic={'tau': SM_RDst})
+            cPre = drawPlots('prefit', histo, args.category.capitalize(), args, scale_dic={'tau': SM_RDst})
         args.step.remove('preFitPlots')
 
 
@@ -4344,9 +4512,9 @@ if __name__ == "__main__":
         if args.category == 'comb':
             cPre = {}
             for c in categoriesToCombine:
-                drawShapeVarPlots(card=card_name.replace('comb', c), tag='_'+c)
+                drawShapeVarPlots(card_name.replace('comb', c), args, '_'+c)
         else:
-            drawShapeVarPlots(card_name)
+            drawShapeVarPlots(card_name, args)
         args.step.remove('shapeVarPlots')
 
     if 'card' in args.step:
@@ -4354,26 +4522,25 @@ if __name__ == "__main__":
             print '-----> Creating the datacard' + (' (fit regions only)' if fitRegionsOnly else '')
             cl = card_location.replace('.txt', '_fitRegionsOnly.txt') if fitRegionsOnly else card_location
             if args.category == 'comb':
-                createCombinationCard(fitRegionsOnly)
+                createCombinationCard(args, fitRegionsOnly)
             else:
-                card = createSingleCard(histo, categoriesDef[args.category], fitRegionsOnly)
-                if args.showCard:
+                card = createSingleCard(histo, categoriesDef[args.category], args, fitRegionsOnly)
+                if args.show_card:
                     print 3*'\n'
                     print '--------> Dumping Combine card (fitRegionsOnly {})'.format(fitRegionsOnly)
                     print card
                     print 3*'\n'
                 print 'Card location:', cl
-                fc = open(cl, 'w')
-                fc.write(card)
-                fc.close()
+                with open(cl, 'w') as f:
+                    f.write(card)
 
             cmd = 'cp '+cl+' '+webFolder+'/'+os.path.basename(cl)
             runCommandSafe(cmd)
 
 
-        if args.validateCard:
+        if args.validate_card:
             cl = card_location.replace('.txt', '_fitRegionsOnly.txt')
-            cmd = 'cd ' + os.path.dirname(cl) + '; '
+            cmd = 'cd ' + dirname(cl) + '; '
             cmd += 'ValidateDatacards.py ' + os.path.basename(cl) + ' -p 3 -c 0.2'
             print cmd
             status, output = commands.getstatusoutput(cmd)
@@ -4396,16 +4563,16 @@ if __name__ == "__main__":
         if not os.path.isdir(biasOut):
             os.makedirs(biasOut)
 
-        both = args.runBiasAnalysis and args.runBiasToys
-        if (not args.runBiasAnalysis) or both:
-            biasToysScan(card_location.replace('.txt', '_fitRegionsOnly.txt'), biasOut, args.seed, args.nToys)
-        if (not args.runBiasToys) or both:
-            collectBiasToysResults(biasOut, args.toysRDst)
+        both = args.run_bias_analysis and args.run_bias_toys
+        if (not args.run_bias_analysis) or both:
+            biasToysScan(card_location.replace('.txt', '_fitRegionsOnly.txt'), biasOut, args, args.seed, args.ntoys)
+        if (not args.run_bias_toys) or both:
+            collectBiasToysResults(biasOut, args.toys_rdst)
 
     if 'scan' in args.step:
         print '-----> Running likelyhood scan'
-        if len(args.RDstLims) > 0:
-            rLimits = args.RDstLims
+        if len(args.rdst_lims) > 0:
+            rLimits = args.rdst_lims
         elif args.unblinded:
             rLimits = [0.1]
         elif not args.unblinded:
@@ -4414,9 +4581,9 @@ if __name__ == "__main__":
             else:
                 rLimits = [0.3]
 
-        if args.maskScan:
+        if args.mask_scan:
             maskList = []
-            for n in args.maskScan:
+            for n in args.mask_scan:
                 knList = histo.keys()
                 if args.category == 'comb':
                     knList = []
@@ -4428,23 +4595,26 @@ if __name__ == "__main__":
                         print 'Masking', kn
                         maskList.append('mask_'+kn+'=1')
             maskStr = ','.join(maskList)
-            fit_RDst, rDst_postFitRegion = runScan(args.scanTag, card_location, outdir,
+            fit_RDst, rDst_postFitRegion = runScan(args.scan_tag, card_location, outdir,
                                                    args.category.capitalize(),
+                                                   args,
                                                    maskStr=maskStr,
                                                    rLimits=rLimits, strategy=0, draw=True, dumpNuis=True)
-        elif args.scanTag:
-            fit_RDst, rDst_postFitRegion = runScan(args.scanTag, card_location.replace('.txt', '_fitRegionsOnly.txt'), outdir,
+        elif args.scan_tag:
+            fit_RDst, rDst_postFitRegion = runScan(args.scan_tag, card_location.replace('.txt', '_fitRegionsOnly.txt'), outdir,
                                                    args.category.capitalize(),
-                                                   freezePars=args.freezeParsScan,
+                                                   args,
+                                                   freezePars=args.freeze_pars_scan,
                                                    rLimits=rLimits,
                                                    strategy=0, draw=True, dumpNuis=True)
         else:
             fit_RDst, rDst_postFitRegion = runScan('Base', card_location.replace('.txt', '_fitRegionsOnly.txt'), outdir,
                                                    args.category.capitalize(),
+                                                   args,
                                                    rLimits=rLimits,
                                                    strategy=0, draw=True, dumpNuis=True)
     else:
-        rDst_postFitRegion = args.RDstLims if len(args.RDstLims) == 2 else [0.1, 0.5]
+        rDst_postFitRegion = args.rdst_lims if len(args.rdst_lims) == 2 else [0.1, 0.5]
         fit_RDst = SM_RDst
     rDst_postFitRegion[0] = max(0, rDst_postFitRegion[0])
     print '[INFO] R(D*) central value set to {:.3f}'.format(fit_RDst)
@@ -4462,73 +4632,75 @@ if __name__ == "__main__":
     if 'GoF' in args.step:
         print '-----> Goodnees of Fit'
         maskList = []
-        if args.maskEvalGoF:
-            if len(args.algoGoF) > 1 or args.algoGoF[0] != 'Sat':
+        if args.mask_eval_gof:
+            if len(args.algo_gof) > 1 or args.algo_gof[0] != 'Sat':
                 print 'Only saturated algorith accept masks. Running only algo=Sat'
-                args.algoGoF = ['Sat']
+                args.algo_gof = ['Sat']
 
-            for n in args.maskEvalGoF:
+            for n in args.mask_eval_gof:
                 for kn in histo.keys():
                     if not re.match(n, kn) is None:
                         print 'Masking', kn
                         maskList.append('mask_'+kn+'=1')
         maskStr = ','.join(maskList)
-        for algo in args.algoGoF:
-            runGoodnessOfFit(args.tagGoF, card_location.replace('.txt', '_fitRegionsOnly.txt'), outdir,
-                             algo, fixRDst=args.forceRDst, maskEvalGoF=maskStr)
+        for algo in args.algo_gof:
+            runGoodnessOfFit(args.tag_gof, card_location.replace('.txt', '_fitRegionsOnly.txt'), outdir,
+                             algo, args, fixRDst=args.force_rdst, maskEvalGoF=maskStr)
             print '-'
 
     if 'uncBreakdownTable' in args.step:
         runUncertaintyBreakDownTable(card_location.replace('.txt', '_fitRegionsOnly.txt'), outdir,
                                 args.category.capitalize(),
+                                scan,
                                 rVal=fit_RDst, rLimits=rDst_postFitRegion)
 
     if 'externalize' in args.step:
         print '-----> Running externalization'
         externalizeUncertainty(card_location.replace('.txt', '_fitRegionsOnly.txt'), outdir,
-                               parameters=args.externPars,
-                               center=args.externCenter,
-                               sigma=args.externSigma,
-                               tag=args.externTag,
+                               parameters=args.extern_pars,
+                               center=args.extern_center,
+                               sigma=args.extern_sigma,
+                               tag=args.extern_tag,
                                rVal=SM_RDst, rLimits=[0.1, 0.45]
                                )
 
     if 'fitDiag' in args.step:
         print '-----> Running fit diagnostic'
-        globalChannelMaskingStr = defineChannelMasking(histo)
-        runFitDiagnostic(args.cardTag, card_location, outdir,
+        globalChannelMaskingStr = defineChannelMasking(histo, args)
+        runFitDiagnostic(args.card_tag, card_location, outdir,
                          strategy=0 if args.category == 'comb' else 1,
-                         forceRDst=args.forceRDst, maskStr=globalChannelMaskingStr,
+                         forceRDst=args.force_rdst, maskStr=globalChannelMaskingStr,
                          rVal=fit_RDst, rLimits=rDst_postFitRegion)
 
     if 'postFitPlots' in args.step:
         print '-----> Getting postfit results'
-        histo_post, _, _ = getPostfitHistos(args.cardTag, outdir, forceRDst=args.forceRDst, histo_prefit=histo)
+        histo_post, _, _ = getPostfitHistos(args.card_tag, outdir, args.force_rdst, histo, args)
         if args.category == 'comb':
             cPost = {}
             cPrePostComp = {}
             for c in categoriesToCombine:
-                tag = 'postfit'+c.capitalize() + ('_RDstFixed' if args.forceRDst else '')
-                cPost[c] = drawPlots(tag, histo_post[c], c.capitalize())
-                cPrePostComp[c] = drawPrePostFitComparison(histo[c], histo_post[c], tag=c + ('_RDstFixed' if args.forceRDst else ''))
+                tag = 'postfit'+c.capitalize() + ('_RDstFixed' if args.force_rdst else '')
+                cPost[c] = drawPlots(tag, histo_post[c], c.capitalize(), args)
+                cPrePostComp[c] = drawPrePostFitComparison(histo[c], histo_post[c], tag=c + ('_RDstFixed' if args.force_rdst else ''))
         else:
-            tag = 'postfit'+ ('_RDstFixed' if args.forceRDst else '')
-            cPost = drawPlots(tag, histo_post, args.category.capitalize())
-            cPrePostComp = drawPrePostFitComparison(histo, histo_post, tag=('_RDstFixed' if args.forceRDst else ''))
-        nuisancesDiff(args.cardTag, outdir, args.forceRDst)
+            tag = 'postfit'+ ('_RDstFixed' if args.force_rdst else '')
+            cPost = drawPlots(tag, histo_post, args.category.capitalize(), args)
+            cPrePostComp = drawPrePostFitComparison(histo, histo_post, tag=('_RDstFixed' if args.force_rdst else ''))
+        nuisancesDiff(args.card_tag, outdir, args.force_rdst)
         print '\n'
 
     if 'uncBreakdownScan' in args.step:
         runUncertaintyBreakDownScan(card_location.replace('.txt', '_fitRegionsOnly.txt'), outdir,
                                 args.category.capitalize(),
+                                args,
                                 rVal=fit_RDst, rLimits=rDst_postFitRegion)
 
     if 'impacts' in args.step:
         print '-----> Running impact plots'
         submit, collect = True, True
-        if args.collectImpacts and not args.subOnlyImpacts:
+        if args.collect_impacts and not args.sub_only_impacts:
             submit, collect = False, True
-        elif not args.collectImpacts and args.subOnlyImpacts:
+        elif not args.collect_impacts and args.sub_only_impacts:
             submit, collect = True, False
         runNuisanceImpacts(card_location.replace('.txt', '_fitRegionsOnly.txt'), outdir,
                            args.category.capitalize(),

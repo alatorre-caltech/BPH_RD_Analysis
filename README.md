@@ -1,6 +1,39 @@
 # Analysis code for the R(D*) measurement with parked data in CMSSW
 
-This code has to be run after sourceing CMSSW_10_2_3. It does not require compilation but needs the CMSSW environment to be active.
+This code has to be run after sourceing CMSSW_10_2_3. It does not require
+compilation but needs the CMSSW environment to be active.
+
+## Setting up a RHEL7 environment
+
+The current Caltech Tier2 computers run Alma Linux 8, but the only compiled versions of CMSSW which work with the analysis require RHEL7. Therefore, we use a singularity image for RHEL7. First, create a local bin directory:
+
+```console
+$ mkdir ~/bin
+$ echo "export PATH=$HOME/bin:$PATH" >> ~/.bash_profile
+$ echo "source /cvmfs/cms.cern.ch/cmsset_default.sh" >> ~/.bash_profile
+$ source ~/.bash_profile
+$ cp `which cmssw-cc7` ~/bin
+```
+
+Then, edit the file `~/bin/cmssw-cc7` and add the following line:
+
+```
+SINGULARITY_BINDPATH=$SINGULARITY_BINDPATH,/storage/:/storage/
+```
+
+just before the last line, i.e.
+
+```
+[...]
+SINGULARITY_BINDPATH=$SINGULARITY_BINDPATH,/storage/:/storage/
+singularity -s exec ${SINGULARITY_OPTS} $UNPACKED_IMAGE sh -c "${CMD_TO_RUN[@]}"
+```
+
+All the rest of the commands in this installation should be preceded by launching the singularity image:
+
+```
+$ cmssw-cc7
+```
 
 ## Suggestions for installation
 

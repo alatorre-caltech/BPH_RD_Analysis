@@ -15,6 +15,10 @@ ops = {'>': operator.gt, '<': operator.lt, }
 # Latest ntuple tag. This tag contains a fix for the impact parameter uncertianty on MC
 NTUPLE_TAG = 'fix_dxy_error_v4'
 
+def load_yaml(filename):
+    with open(filename,'r') as f:
+        return yaml.safe_load(f)
+
 def check_file(fn):
     """
     Check whether a ROOT file is broken or wasn't closed properly, and if so,
@@ -203,10 +207,10 @@ class DSetLoader(object):
                  candDir='ntuples_B2DstMu',
                  # site_loc_conf = '/storage/cms/store/user/ocerri/',
                  sampleFile = '/storage/af/user/ocerri/work/CMSSW_10_2_3/src/ntuplizer/BPH_RDntuplizer/production/samples.yml',
-                 skimmedTag = '',
+                 skim_tag = '',
                  loadSkim=None
                  ):
-        samples = yaml.load(open(sampleFile))['samples']
+        samples = load_yaml(sampleFile)['samples']
         if not in_sample in samples.keys():
             raise
         self.sample = in_sample
@@ -231,18 +235,18 @@ class DSetLoader(object):
         res = glob(os.path.join(self.candLoc, self.full_name, self.candDir))
         if res:
             self.ntuples_dir = res[0]
-            self.skimmed_dir = os.path.join(self.ntuples_dir, 'skimmed') + skimmedTag
+            self.skimmed_dir = os.path.join(self.ntuples_dir, 'skimmed') + skim_tag
         else:
             self.ntuples_dir = ''
             self.skimmed_dir = ''
 
         effMCgenFile = os.path.join(self.candLoc, self.full_name, 'effMCgenerator.yaml')
         if os.path.isfile(effMCgenFile):
-            self.effMCgen = yaml.load(open(effMCgenFile, 'r'))
+            self.effMCgen = load_yaml(effMCgenFile)
 
         effCandFile = os.path.join(self.ntuples_dir, 'effCAND.yaml')
         if os.path.isfile(effCandFile):
-            self.effCand = yaml.load(open(effCandFile, 'r'))
+            self.effCand = load_yaml(effCandFile)
         else:
             print 'CAND efficiency file missing for {}.'.format(in_sample)
 

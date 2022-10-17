@@ -148,8 +148,8 @@ def getPolyCorrection(hNum, hDen, deg, tag, verbose=False):
 
 
 # # Load MC
-# mcSample = DSetLoader('Bd_JpsiKst_General', candDir='ntuples_Bd2JpsiKst_%s' % NTUPLE_TAG, skimmedTag=args.skimTag)
-mcSample = DSetLoader('Bd_JpsiKst_General', candDir='ntuples_Bd2JpsiKst_220531', skimmedTag=args.skimTag)
+# mcSample = DSetLoader('Bd_JpsiKst_General', candDir='ntuples_Bd2JpsiKst_%s' % NTUPLE_TAG, skim_tag=args.skimTag)
+mcSample = DSetLoader('Bd_JpsiKst_General', candDir='ntuples_Bd2JpsiKst_220531', skim_tag=args.skimTag)
 dsetMC_loc = mcSample.skimmed_dir + '/{}_corr.root'.format(cat.name)
 dfMC = pd.DataFrame(rtnp.root2array(dsetMC_loc))
 

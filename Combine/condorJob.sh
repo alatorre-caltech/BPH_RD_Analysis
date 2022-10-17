@@ -7,6 +7,8 @@ source /cvmfs/cms.cern.ch/cmsset_default.sh
 eval `scramv1 runtime -sh`
 echo "cd $directory"
 cd $directory
+echo "source ../env.sh"
+source ../env.sh
 echo "$command"
 echo " "; echo " "; echo " "
 echo "======================== JOB START ========================"
