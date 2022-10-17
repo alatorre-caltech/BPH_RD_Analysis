@@ -42,7 +42,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument ('--function', type=str, default='main', help='Function to perform')
 parser.add_argument ('-d', '--dataset', type=str, default=[], help='Dataset(s) to run on or regular expression for them', nargs='+')
 parser.add_argument ('--skimTag', type=str, default='', help='Tag to append at the name of the skimmed files directory')
-parser.add_argument ('-p', '--parallelType', choices=['pool', 'jobs', 'serial', 'none'], default='jobs', help='Function to perform')
+parser.add_argument ('-p', '--parallel-type', choices=['pool', 'jobs', 'serial', 'none'], default='jobs', help='Function to perform')
 parser.add_argument ('--maxEvents', type=int, default=1e15, help='Max number of events to be processed')
 parser.add_argument ('-f','--recreate', default=False, action='store_true', help='Recreate even if file already present')
 parser.add_argument ('--applyCorr', default=True, type=str2bool, help='Switch to apply crrections')
@@ -633,7 +633,7 @@ def create_dSet(n, filepath, cat, applyCorrections=False, skipCut=[], maxEvents=
             if 'data' in n:
                 applyCorr = 'RD'
 
-        if N_cand_in < 1.5*N_evts_per_job or args.parallelType == 'serial':
+        if args.parallel_type == 'serial':
             output, N_accepted_cand = makeSelection([n, '', filenames, leafs_names, cat,
                                                      [0, N_cand_in-1], applyCorr, skipCut, True])
         else:
@@ -650,10 +650,10 @@ def create_dSet(n, filepath, cat, applyCorrections=False, skipCut=[], maxEvents=
             print ' '
 
             start = time.time()
-            if args.parallelType == 'pool' or len(inputs) < 15:
+            if args.parallel_type == 'pool':
                 p = Pool(min(20,len(inputs)))
                 outputs = p.map(makeSelection, inputs)
-            elif args.parallelType == 'jobs':
+            elif args.parallel_type == 'jobs':
                 tmpDir = 'tmp/B2JpsiKst_skimCAND_%s_%s' % (n,catName)
                 if applyCorrections:
                     tmpDir += '_corr'
