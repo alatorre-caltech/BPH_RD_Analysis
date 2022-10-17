@@ -1,15 +1,12 @@
 #!/usr/bin/env python
 
 import sys, os, pickle, yaml, time, argparse, copy
-sys.path.append('../lib')
-if os.environ['CMSSW_VERSION'] != 'CMSSW_10_2_3':
-    raise
-
 from glob import glob
 from array import array
 
 import numpy as np
 import scipy.stats as sps
+from scipy.stats import chi2 as scipy_chi2
 import pandas as pd
 
 import matplotlib.pyplot as plt
@@ -26,15 +23,21 @@ tdrstyle.setTDRStyle()
 CMS_lumi.writeExtraText = 1
 CMS_lumi.extraText = "     Internal"
 
-from histo_utilities import create_TH1D, create_TH2D, std_color_list, SetMaxToMaxHist, make_ratio_plot
-from progressBar import ProgressBar
-from lumi_utilities import getLumiByTrigger
-from pileup_utilities import pileupReweighter
-from beamSpot_calibration import getBeamSpotCorrectionWeights
+try:
+    from histo_utilities import create_TH1D, create_TH2D, std_color_list, SetMaxToMaxHist, make_ratio_plot
+    from progressBar import ProgressBar
+    from lumi_utilities import getLumiByTrigger
+    from pileup_utilities import pileupReweighter
+    from beamSpot_calibration import getBeamSpotCorrectionWeights
 
-from categoriesDef import categories
-from analysis_utilities import drawOnCMSCanvas, DSetLoader, str2bool, NTUPLE_TAG
-from pT_calibration_reader import pTCalReader as calibrationReader
+    from categoriesDef import categories
+    from analysis_utilities import drawOnCMSCanvas, DSetLoader, str2bool, NTUPLE_TAG
+    from pT_calibration_reader import pTCalReader as calibrationReader
+except ImportError:
+    print >> sys.stderr, "Failed to import analysis_utilities."
+    print >> sys.stderr, "Did you remember to source the env.sh file in the repo?"
+    sys.exit(1)
+
 donotdelete = []
 
 parser = argparse.ArgumentParser(description='Script used to calibrate Bd kin',
@@ -329,6 +332,11 @@ def makePlot(var, binning=None, axis_title=None, wMC=[None], wRD=None, tag='', l
 
 makePlot('N_vtx', binning=[70, 0.5, 70.5], wMC=[dfMC['w']],
          axis_title=['Number of vertexes', 'Normalized entries'], saveFig='reconstructedVertexes_'+cat.name+'.png')
+makePlot('PV_chi2', binning=[100, 0, 200], wMC=[dfMC['w']], axis_title=['PV_chi2', 'Normalized entries'], saveFig='PV_chi2_'+cat.name+'.png')
+makePlot('PV_ndof', binning=[100, 0, 200], wMC=[dfMC['w']], axis_title=['PV_ndof', 'Normalized entries'], saveFig='PV_ndof_'+cat.name+'.png')
+dfMC['PV_pval'] = 1-scipy_chi2.cdf(dfMC['PV_chi2'],dfMC['PV_ndof'])
+dfRD['PV_pval'] = 1-scipy_chi2.cdf(dfMC['PV_chi2'],dfMC['PV_ndof'])
+makePlot('PV_pval', binning=[100, 0, 1], wMC=[dfMC['w']], axis_title=['PV_pval', 'Normalized entries'], saveFig='PV_pval_'+cat.name+'.png')
 
 if cat.name == "Low":
     low, high = 5, 100
