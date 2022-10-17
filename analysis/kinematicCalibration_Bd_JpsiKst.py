@@ -147,9 +147,8 @@ def getPolyCorrection(hNum, hDen, deg, tag, verbose=False):
     pickle.dump(dOut, open(dataLoc+'calibration/kinematicCalibration_Bd/'+tag+'_{}_{}.pkl'.format(cat.name, version), 'wb'))
 
 
-# # Load MC
-# mcSample = DSetLoader('Bd_JpsiKst_General', candDir='ntuples_Bd2JpsiKst_%s' % NTUPLE_TAG, skim_tag=args.skimTag)
-mcSample = DSetLoader('Bd_JpsiKst_General', candDir='ntuples_Bd2JpsiKst_220531', skim_tag=args.skimTag)
+# Load MC
+mcSample = DSetLoader('Bd_JpsiKst_General', candDir='ntuples_Bd2JpsiKst_%s' % NTUPLE_TAG, skim_tag=args.skimTag)
 dsetMC_loc = mcSample.skimmed_dir + '/{}_corr.root'.format(cat.name)
 dfMC = pd.DataFrame(rtnp.root2array(dsetMC_loc))
 
