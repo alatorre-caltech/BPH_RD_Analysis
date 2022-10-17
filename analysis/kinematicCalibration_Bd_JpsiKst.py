@@ -43,7 +43,7 @@ parser = argparse.ArgumentParser(description='Script used to calibrate Bd kin',
                                  )
 parser.add_argument ('--category', '-c', type=str, default='high', choices=['low', 'mid', 'high'], help='Category.')
 parser.add_argument ('--version', '-v', default='test', help='Version.')
-parser.add_argument ('--skimTag', type=str, default='_no_pval_dxy_selection', help='Tag to append at the name of the skimmed files directory')
+parser.add_argument ('--skimTag', type=str, default='', help='Tag to append at the name of the skimmed files directory')
 parser.add_argument ('--showPlots', default=False, action='store_true', help='Show plots by setting ROOT batch mode OFF (default ON)')
 parser.add_argument ('--BScal', default=False, type=str2bool, help='Apply beam spot calibration')
 parser.add_argument ('--draw_precal', default=False, action='store_true', help='Draw also precal plots')
