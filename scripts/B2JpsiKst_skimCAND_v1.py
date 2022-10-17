@@ -22,9 +22,10 @@ rt.PyConfig.IgnoreCommandLineOptions = True
 rt.gErrorIgnoreLevel = rt.kError
 rt.RooMsgService.instance().setGlobalKillBelow(rt.RooFit.ERROR)
 import root_numpy as rtnp
+import gc
 
 try:
-    from analysis_utilities import drawOnCMSCanvas, getEff, str2bool, check_file, NTUPLE_TAG
+    from analysis_utilities import getEff, check_file, str2bool, NTUPLE_TAG, load_yaml, print_warning
     from histo_utilities import create_TH1D, create_TH2D, std_color_list, SetMaxToMaxHist
     from cebefo_style import Set_2D_colz_graphics
     from gridVarQ2Plot import col_dic, plot_gridVarQ2
@@ -620,7 +621,7 @@ def create_dSet(n, filepath, cat, skim_tag, parallel_type, applyCorrections=Fals
             output, N_accepted_cand = makeSelection([n, '', filenames, leafs_names, cat,
                                                      [0, N_cand_in-1], applyCorr, skipCut, True])
         else:
-            pdiv = list(np.arange(0, N_cand_in, N_evts_per_job))
+            pdiv = list(range(0, N_cand_in, N_evts_per_job))
             if not pdiv[-1] == N_cand_in:
                 pdiv.append(N_cand_in)
             print 'Will be divided into ' + str(len(pdiv)-1) + ' jobs'
@@ -643,23 +644,26 @@ def create_dSet(n, filepath, cat, skim_tag, parallel_type, applyCorrections=Fals
                 os.system('rm -rf ' + tmpDir + '/out')
                 os.system('rm -rf ' + tmpDir + '/*.p')
                 os.makedirs(tmpDir + '/out')
+                tmpDir = os.path.abspath(tmpDir)
                 for ii, inAux in enumerate(inputs):
-                    pickle.dump( inAux, open( tmpDir+'/input_{}.p'.format(ii), 'wb' ) )
+                    with open(join(tmpDir,'input_%i.p' % ii), 'wb') as f:
+                        pickle.dump(inAux, f)
                 createSubmissionFile(tmpDir, len(inputs))
                 print 'Submitting jobs'
-                cmd = 'condor_submit {}/jobs.jdl'.format(tmpDir)
+                cmd = 'condor_submit %s' % join(tmpDir,'jobs.jdl')
                 batch_name = 'skim_Bd2JpsiKst_%s_%s' % (n,catName)
                 if applyCorrections:
                     batch_name += '_corr'
                 cmd += ' -batch-name %s' % batch_name
                 status, output = commands.getstatusoutput(cmd)
-                if status !=0:
-                    print 'Error in processing command:\n   ['+cmd+']'
-                    print 'Output:\n   ['+output+'] \n'
+                if status != 0:
+                    print_warning("Error in processing command: '%s'" % cmd)
+                    print_warning("Output: %s" % output)
+                    sys.exit(1)
                 print 'Job submitted'
                 print 'Waiting for jobs to be finished'
                 time.sleep(20)
-                proceed=False
+                proceed = False
                 while not proceed:
                     status, output = commands.getstatusoutput('condor_q')
                     found = False
@@ -669,15 +673,22 @@ def create_dSet(n, filepath, cat, skim_tag, parallel_type, applyCorrections=Fals
                             time.sleep(10)
                             found = True
                     proceed = not found
+                print 'All jobs finished'
 
+                print 'Fetching jobs output'
                 outputs = []
                 for ii in range(len(inputs)):
-                    o = pickle.load( open( tmpDir+'/output_{}.p'.format(ii), 'rb' ) )
+                    with open(tmpDir+'/output_{}.p'.format(ii), 'rb') as f:
+                        o = pickle.load(f)
                     outputs.append(o)
+
+                    # Try to free up as much memory as possible
+                    gc.collect()
 
             output = np.concatenate(tuple([o[0] for o in outputs]))
             N_accepted_cand = []
-            for o in outputs: N_accepted_cand += o[1]
+            for o in outputs:
+                N_accepted_cand += o[1]
             print 'Total time: {:.1f} min'.format((time.time()-start)/60.)
 
 
@@ -710,65 +721,50 @@ def create_dSet(n, filepath, cat, skim_tag, parallel_type, applyCorrections=Fals
     os.system('echo '+logfile+';cat '+logfile + ';echo ')
 
 def createSubmissionFile(tmpDir, njobs):
-    fjob = open(tmpDir+'/job.sh', 'w')
-    fjob.write('#!/bin/bash\n')
-    fjob.write('source /cvmfs/cms.cern.ch/cmsset_default.sh; cd /storage/af/user/ocerri/CMSSW_10_2_3/; eval `scramv1 runtime -sh`\n')
-    fjob.write('cd '+os.path.dirname(os.path.abspath(__file__))+'\n')
-    fjob.write('python B2JpsiKst_skimCAND_v1.py --function makeSel --tmpDir $1 --jN $2\n')
-    os.system('chmod +x {}/job.sh'.format(tmpDir))
+    job_file = join(tmpDir,'job.sh')
+    with open(job_file, 'w') as fjob:
+        fjob.write('#!/bin/bash\n')
+        fjob.write('source /cvmfs/cms.cern.ch/cmsset_default.sh\n')
+        fjob.write('cd %s/RDstAnalysis/CMSSW_10_2_3/\n' % os.environ['HOME'])
+        fjob.write('eval `scramv1 runtime -sh`\n')
+        fjob.write('cd %s/RDstAnalysis/BPH_RD_Analysis/\n' % os.environ['HOME'])
+        fjob.write('export PYTHONPATH=%s/RDstAnalysis/BPH_RD_Analysis/lib:$PYTHONPATH\n' % os.environ['HOME'])
+        fjob.write('export PYTHONPATH=%s/RDstAnalysis/BPH_RD_Analysis/analysis:$PYTHONPATH\n' % os.environ['HOME'])
+        fjob.write('source env.sh\n')
+        fjob.write('python ./scripts/B2JpsiKst_skimCAND_v1.py --make-sel --tmp-dir $1 -j $2\n')
+    os.system('chmod +x %s/job.sh' % tmpDir)
 
-    fsub = open(tmpDir+'/jobs.jdl', 'w')
-    fsub.write('executable    = ' + tmpDir+'/job.sh')
-    fsub.write('\n')
-    fsub.write('arguments     = {} $(ProcId) '.format(tmpDir))
-    fsub.write('\n')
-    fsub.write('output        = {}/out/job_$(ProcId)_$(ClusterId).out'.format(tmpDir))
-    fsub.write('\n')
-    fsub.write('error         = {}/out/job_$(ProcId)_$(ClusterId).err'.format(tmpDir))
-    fsub.write('\n')
-    fsub.write('log           = {}/out/job_$(ProcId)_$(ClusterId).log'.format(tmpDir))
-    fsub.write('\n')
-    fsub.write('WHEN_TO_TRANSFER_OUTPUT = ON_EXIT_OR_EVICT')
-    fsub.write('\n')
-    fsub.write('+JobQueue="Short"')
-    fsub.write('\n')
-    fsub.write('+MaxRuntime   = 3600')
-    fsub.write('\n')
-    fsub.write('+RunAsOwner = True')
-    fsub.write('\n')
-    fsub.write('+InteractiveUser = True')
-    fsub.write('\n')
-    fsub.write('+SingularityImage = "/cvmfs/singularity.opensciencegrid.org/cmssw/cms:rhel7"')
-    fsub.write('\n')
-    fsub.write('+SingularityBindCVMFS = True')
-    fsub.write('\n')
-    fsub.write('run_as_owner = True')
-    fsub.write('\n')
-    fsub.write('RequestDisk = 2000000')
-    fsub.write('\n')
-    fsub.write('RequestMemory = 2500')
-    fsub.write('\n')
-    fsub.write('RequestCpus = 1')
-    fsub.write('\n')
-    fsub.write('x509userproxy = $ENV(X509_USER_PROXY)')
-    fsub.write('\n')
-    fsub.write('on_exit_remove = (ExitBySignal == False) && (ExitCode == 0)')
-    fsub.write('\n')
-    fsub.write('on_exit_hold = (ExitBySignal == True) || (ExitCode != 0)')   # Send the job to Held state on failure.
-    fsub.write('\n')
-    fsub.write('periodic_release =  (NumJobStarts < 2) && ((CurrentTime - EnteredCurrentStatus) > (60*20))')   # Periodically retry the jobs for 3 times with an interval of 20 minutes.
-    fsub.write('\n')
-    fsub.write('+PeriodicRemove = ((JobStatus =?= 2) && ((MemoryUsage =!= UNDEFINED && MemoryUsage > 2.5*RequestMemory)))')
-    fsub.write('\n')
-    fsub.write('max_retries    = 3')
-    fsub.write('\n')
-    fsub.write('requirements   = Machine =!= LastRemoteHost')
-    fsub.write('\n')
-    fsub.write('universe = vanilla')
-    fsub.write('\n')
-    fsub.write('queue '+str(njobs))
-    fsub.write('\n')
-    fsub.close()
+    sub_file = join(tmpDir,'jobs.jdl')
+    with open(sub_file, 'w') as fsub:
+        fsub.write('executable    = %s\n' % job_file)
+        fsub.write("arguments     = {} $(ProcId)\n".format(tmpDir))
+        fsub.write('output        = {}/out/job_$(ProcId)_$(ClusterId).out\n'.format(tmpDir))
+        fsub.write('error         = {}/out/job_$(ProcId)_$(ClusterId).err\n'.format(tmpDir))
+        fsub.write('log           = {}/out/job_$(ProcId)_$(ClusterId).log\n'.format(tmpDir))
+        fsub.write('WHEN_TO_TRANSFER_OUTPUT = ON_EXIT_OR_EVICT\n')
+        fsub.write('+JobQueue="Short"\n')
+        # fsub.write('+RequestWalltime   = 7000\n')
+        fsub.write('+MaxRuntime   = 7000\n')
+        fsub.write('+RunAsOwner = True\n')
+        fsub.write('+InteractiveUser = True\n')
+        fsub.write('+SingularityImage = "/cvmfs/singularity.opensciencegrid.org/cmssw/cms:rhel7"\n')
+        fsub.write('+SingularityBindCVMFS = True\n')
+        fsub.write('run_as_owner = True\n')
+        fsub.write('RequestDisk = 2000000\n')
+        fsub.write('RequestMemory = 2500\n')
+        fsub.write('RequestCpus = 1\n')
+        fsub.write('x509userproxy = $ENV(X509_USER_PROXY)\n')
+        fsub.write('on_exit_remove = ((ExitBySignal == False) && (ExitCode == 0)) || (JobStatus=?=3)\n')
+        # Send the job to Held state on failure.
+        fsub.write('on_exit_hold = (ExitBySignal == True) || (ExitCode != 0)\n')
+        # Periodically retry the jobs for 2 times with an interval of 20 minutes.
+        fsub.write('periodic_release =  (NumJobStarts < 2) && ((CurrentTime - EnteredCurrentStatus) > (60*20))\n')
+        fsub.write('+PeriodicRemove = ((JobStatus =?= 2) && ((MemoryUsage =!= UNDEFINED && MemoryUsage > 2.5*RequestMemory)))\n')
+        fsub.write('max_retries    = 3\n')
+        fsub.write('requirements   = Machine =!= LastRemoteHost\n')
+        fsub.write('universe = vanilla\n')
+        fsub.write('queue %i\n' % njobs)
+        fsub.close()
 
 if __name__ == "__main__":
     import argparse

@@ -15,7 +15,7 @@ You can also pass a list of regular expressions:
     $ python B2DstMu_skimCAND_v1.py -d BdToDstarMuNu,BdToDstarTauNu
 
 """
-import sys, os, pickle, time, re, yaml
+import sys, os, pickle, time, re
 from glob import glob
 from multiprocessing import Pool
 import commands
@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 try:
-    from analysis_utilities import getEff, check_file, str2bool, NTUPLE_TAG
+    from analysis_utilities import getEff, check_file, str2bool, NTUPLE_TAG, load_yaml, print_warning
     from progressBar import ProgressBar
     from categoriesDef import categories
     from B2DstMu_selection import candidate_selection, trigger_selection
@@ -51,17 +51,6 @@ B_VTX_STD_X = 0.001
 B_VTX_STD_Y = 0.001
 B_VTX_STD_Z = 0.001
 
-class bcolors:
-    HEADER = '\033[95m'
-    OKBLUE = '\033[94m'
-    OKCYAN = '\033[96m'
-    OKGREEN = '\033[92m'
-    WARNING = '\033[93m'
-    FAIL = '\033[91m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
-
 #############################################################################
 ####                          Datset declaration                         ####
 #############################################################################
@@ -86,7 +75,7 @@ MC_samples = ['Bd_MuNuDst',
               ]
 
 sampleFile = '/storage/af/user/ocerri/work/CMSSW_10_2_3/src/ntuplizer/BPH_RDntuplizer/production/samples.yml'
-samples = yaml.load(open(sampleFile))['samples']
+samples = load_yaml(sampleFile)['samples']
 for s in MC_samples:
     filesLocMap[s] = join(MCloc, samples[s]['dataset'], MCend)
 
@@ -1371,8 +1360,8 @@ leafs_names, cat,
                 cmd += ' -batch-name %s' % batch_name
                 status, output = commands.getstatusoutput(cmd)
                 if status != 0:
-                    print >> sys.stderr, "Error in processing command: '%s'" % cmd
-                    print >> sys.stderr, "Output: %s" % output
+                    print_warning("Error in processing command: '%s'" % cmd)
+                    print_warning("Output: %s" % output)
                     sys.exit(1)
                 print 'Job submitted'
                 print 'Waiting for jobs to be finished'
@@ -1484,9 +1473,6 @@ def createSubmissionFile(tmpDir, njobs):
         fsub.write('universe = vanilla\n')
         fsub.write('queue %i\n' % njobs)
         fsub.close()
-
-def print_warning(msg):
-    print >> sys.stderr, bcolors.FAIL + msg + bcolors.ENDC
 
 if __name__ == "__main__":
     import argparse
