@@ -4370,7 +4370,7 @@ if __name__ == "__main__":
     parser.add_argument('--run-bias-analysis', action='store_true', help='Only analyze bias scans which have been previously produced.')
 
     # Scan options
-    parser.add_argument('--scan-strategy', default=1, type=int, help='Minimizer strategy for the scan.')
+    parser.add_argument('--scan-strategy', default=2, type=int, help='Minimizer strategy for the scan.')
     parser.add_argument('--mask-scan', type=str, default=[], nargs='+', help='Channels to mask during likelyhood scan. If this list is non empty, the full card is used (default is fitregionsOnly).')
     parser.add_argument('--scan-tag', type=str, default='')
     parser.add_argument('--freeze-pars-scan', type=str, default=[], nargs='+')
@@ -4599,20 +4599,20 @@ if __name__ == "__main__":
                                                    args.category.capitalize(),
                                                    args,
                                                    maskStr=maskStr,
-                                                   rLimits=rLimits, strategy=0, draw=True, dumpNuis=True)
+                                                   rLimits=rLimits, strategy=args.strategy, draw=True, dumpNuis=True)
         elif args.scan_tag:
             fit_RDst, rDst_postFitRegion = runScan(args.scan_tag, card_location.replace('.txt', '_fitRegionsOnly.txt'), outdir,
                                                    args.category.capitalize(),
                                                    args,
                                                    freezePars=args.freeze_pars_scan,
                                                    rLimits=rLimits,
-                                                   strategy=0, draw=True, dumpNuis=True)
+                                                   strategy=args.strategy, draw=True, dumpNuis=True)
         else:
             fit_RDst, rDst_postFitRegion = runScan('Base', card_location.replace('.txt', '_fitRegionsOnly.txt'), outdir,
                                                    args.category.capitalize(),
                                                    args,
                                                    rLimits=rLimits,
-                                                   strategy=0, draw=True, dumpNuis=True)
+                                                   strategy=args.strategy, draw=True, dumpNuis=True)
     else:
         rDst_postFitRegion = args.rdst_lims if len(args.rdst_lims) == 2 else [0.1, 0.5]
         fit_RDst = SM_RDst
