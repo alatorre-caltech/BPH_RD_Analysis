@@ -2895,7 +2895,7 @@ def createSingleCard(histo, category, args, fitRegionsOnly=False):
                     aux_z += ' 1.'
 
     # Smearing of primary vertex position
-    if not args.freeze_pv:
+    if not args.freeze_pv or args.b_reco in ['coll','prefit']:
         card += 'PV_x shape %s\n' % aux_x
         card += 'PV_y shape %s\n' % aux_y
         card += 'PV_z shape %s\n' % aux_z
