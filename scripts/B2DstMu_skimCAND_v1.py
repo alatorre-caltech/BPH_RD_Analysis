@@ -272,37 +272,80 @@ def extractEventInfos(j, ev, corr=None):
 
     e.B_pt = p4_vis.Pt() * m_B0/ p4_vis.M()
 
-    # Calculate B momentum from primary vertex by smearing the primary vertex
-    # in the x, y, and z directions. This is essentially doing the same
-    # calculation as in B2DstMuDecayTreeProducer.cc.
+    bestVtx = rt.TVector3(ev.vtx_PV_x[j], ev.vtx_PV_y[j], ev.vtx_PV_z[j])
+    smearedVtx = bestVtx.Copy()
+    smearedVtx.SetX(bestVtx.x() + np.random.randn()*B_VTX_STD_X)
+    smearedVtx.SetY(bestVtx.y() + np.random.randn()*B_VTX_STD_Y)
+    smearedVtx.SetZ(bestVtx.z() + np.random.randn()*B_VTX_STD_Z)
+
+    # Calculate B momentum from primary vertex by smearing the primary
+    # vertex in the x, y, and z directions. This is essentially doing the
+    # same calculation as in B2DstMuDecayTreeProducer.cc.
+    #
+    # Here, for the "down" systematic, we *don't* smear the vertex in one
+    # particular direction.
     for attr in ['x','y','z']:
-        bestVtx = rt.TVector3(ev.vtx_PV_x[j], ev.vtx_PV_y[j], ev.vtx_PV_z[j])
+        vtx = smearedVtx.Copy()
         if attr == 'x':
-            bestVtx.SetX(bestVtx.x() + np.random.randn()*B_VTX_STD_X)
+            vtx.SetX(bestVtx.x())
         elif attr == 'y':
-            bestVtx.SetY(bestVtx.y() + np.random.randn()*B_VTX_STD_Y)
+            vtx.SetY(bestVtx.y())
         elif attr == 'z':
-            bestVtx.SetZ(bestVtx.z() + np.random.randn()*B_VTX_STD_Z)
+            vtx.SetZ(bestVtx.z())
         vtxB = rt.TVector3(ev.vtx_B_decay_x[j], ev.vtx_B_decay_y[j], ev.vtx_B_decay_z[j])
-        flightB = rt.TVector3(vtxB.x() - bestVtx.x(), vtxB.y() - bestVtx.y(), vtxB.z() - bestVtx.z())
+        flightB = rt.TVector3(vtxB.x() - vtx.x(), vtxB.y() - vtx.y(), vtxB.z() - vtx.z())
         B_vect = flightB*(e.B_pt/flightB.Perp())
         p4_B = rt.TLorentzVector()
         p4_B.SetVectM(B_vect, m_B0)
 
-        setattr(e,'M2_miss_%s' % attr,(p4_B - p4_vis).M2())
-        setattr(e,'U_miss_%s' % attr,(p4_B - p4_vis).E() - (p4_B - p4_vis).P())
-        setattr(e,'q2_%s' % attr,(p4_B - p4_Dst).M2())
+        setattr(e,'M2_miss_%sDown' % attr,(p4_B - p4_vis).M2())
+        setattr(e,'U_miss_%sDown' % attr,(p4_B - p4_vis).E() - (p4_B - p4_vis).P())
+        setattr(e,'q2_%sDown' % attr,(p4_B - p4_Dst).M2())
 
         p4st_mu = rt.TLorentzVector(p4_mu)
         p4st_mu.Boost(-1*p4_B.BoostVector())
-        setattr(e,'Est_mu_%s' % attr,p4st_mu.E())
+        setattr(e,'Est_mu_%sDown' % attr,p4st_mu.E())
+
+    # Calculate B momentum from primary vertex by smearing the primary
+    # vertex in the x, y, and z directions. This is essentially doing the
+    # same calculation as in B2DstMuDecayTreeProducer.cc.
+    #
+    # Here, for the "up" systematic, we add additional smearing.
+    for attr in ['x','y','z']:
+        vtx = smearedVtx.Copy()
+        if attr == 'x':
+            vtx.SetX(vtx.x() + np.random.randn()*B_VTX_STD_X)
+        elif attr == 'y':
+            vtx.SetY(vtx.y() + np.random.randn()*B_VTX_STD_Y)
+        elif attr == 'z':
+            vtx.SetZ(vtx.z() + np.random.randn()*B_VTX_STD_Z)
+        vtxB = rt.TVector3(ev.vtx_B_decay_x[j], ev.vtx_B_decay_y[j], ev.vtx_B_decay_z[j])
+        flightB = rt.TVector3(vtxB.x() - vtx.x(), vtxB.y() - vtx.y(), vtxB.z() - vtx.z())
+        B_vect = flightB*(e.B_pt/flightB.Perp())
+        p4_B = rt.TLorentzVector()
+        p4_B.SetVectM(B_vect, m_B0)
+
+        setattr(e,'M2_miss_%sUp' % attr,(p4_B - p4_vis).M2())
+        setattr(e,'U_miss_%sUp' % attr,(p4_B - p4_vis).E() - (p4_B - p4_vis).P())
+        setattr(e,'q2_%sUp' % attr,(p4_B - p4_Dst).M2())
+
+        p4st_mu = rt.TLorentzVector(p4_mu)
+        p4st_mu.Boost(-1*p4_B.BoostVector())
+        setattr(e,'Est_mu_%sUp' % attr,p4st_mu.E())
+
+    # Now, for the default values we use the smeared vertex
+    vtxB = rt.TVector3(ev.vtx_B_decay_x[j], ev.vtx_B_decay_y[j], ev.vtx_B_decay_z[j])
+    flightB = rt.TVector3(vtxB.x() - smearedVtx.x(), vtxB.y() - smearedVtx.y(), vtxB.z() - smearedVtx.z())
+    B_vect = flightB*(e.B_pt/flightB.Perp())
+    p4_B = rt.TLorentzVector()
+    p4_B.SetVectM(B_vect, m_B0)
 
     # Using direction from vertex
     e.B_eta = ev.B_D0pismu_eta[j]
     e.B_phi = ev.B_D0pismu_phi[j]
 
-    p4_B = rt.TLorentzVector()
-    p4_B.SetPtEtaPhiM(e.B_pt, e.B_eta, e.B_phi, m_B0)
+    #p4_B = rt.TLorentzVector()
+    #p4_B.SetPtEtaPhiM(e.B_pt, e.B_eta, e.B_phi, m_B0)
 
     e.M2_miss = (p4_B - p4_vis).M2()
     e.U_miss = (p4_B - p4_vis).E() - (p4_B - p4_vis).P()
