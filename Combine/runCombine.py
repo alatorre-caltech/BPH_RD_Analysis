@@ -1132,6 +1132,10 @@ def createHistograms(category, args):
     # binning['mu_sigIP3D_vtxDst'] = 4*[[70, -4, 4]]
     # binning['U_miss'] = 4*[[30, -0.1, 0.18]]
     binning['B_pt'] = array('d', list({'Low': np.arange(10, 75, 2), 'Mid': np.arange(14, 90, 2), 'High': np.arange(18, 110, 2)}[category.name]))
+    binning['dxy_vtxD0pismu_PV'] = array('d', list({'Low': np.arange(0, 10, 1), 'Mid': np.arange(0, 10, 1), 'High': np.arange(0, 10, 1)}[category.name]))
+    binning['sigdxy_vtxD0_BS'] = array('d', list({'Low': np.arange(0, 50, 1), 'Mid': np.arange(0, 50, 1), 'High': np.arange(0, 50, 1)}[category.name]))
+    binning['PV_ndof'] = array('d', list({'Low': np.linspace(0, 200, 100), 'Mid': np.linspace(0, 200, 100), 'High': np.linspace(0, 200, 100)}[category.name]))
+    binning['PV_chi2'] = array('d', list({'Low': np.linspace(0, 200, 100), 'Mid': np.linspace(0, 200, 100), 'High': np.linspace(0, 200, 100)}[category.name]))
     binning['PV_pval'] = array('d', list({'Low': np.arange(0, 1, 0.01), 'Mid': np.arange(0, 1, 0.01), 'High': np.arange(0, 1, 0.01)}[category.name]))
     binning['pval_piK'] = array('d', list({'Low': np.arange(0, 1, 0.01), 'Mid': np.arange(0, 1, 0.01), 'High': np.arange(0, 1, 0.01)}[category.name]))
     binning['pval_D0pis'] = array('d', list({'Low': np.arange(0, 1, 0.01), 'Mid': np.arange(0, 1, 0.01), 'High': np.arange(0, 1, 0.01)}[category.name]))
@@ -1990,6 +1994,46 @@ def drawPlots(tag, hDic, catName, args, scale_dic=None):
                           iq2_maskData=[] if args.unblinded else [2, 3])
     cAux.SaveAs(webFolder+'/signalRegion_'+tag+'.png')
     outCanvas.append(cAux)
+
+    if 'dxy_vtxD0pismu_PV' in hDic.keys():
+        print 'Drawing dxy_vtxD0pismu_PV'
+        hDic['dxy_vtxD0pismu_PV']['data'].GetXaxis().SetTitle('dxy_vtxD0pismu_PV')
+        hDic['dxy_vtxD0pismu_PV']['data'].GetYaxis().SetTitle('Events')
+        cAux = plot_SingleCategory(CMS_lumi, hDic['dxy_vtxD0pismu_PV'], draw_pulls=True, pullsRatio=True, scale_dic=scale_dic,
+                                   addText='Cat. '+catName, logy=False, legBkg=True,
+                                   min_y=1, tag=tag+'dxy_vtxD0pismu_PV', legLoc=[0.65, 0.4, 0.9, 0.75])
+        cAux.SaveAs(webFolder+'/dxy_vtxD0pismu_PV_'+tag+'.png')
+        outCanvas.append(cAux)
+
+    if 'sigdxy_vtxD0_BS' in hDic.keys():
+        print 'Drawing sigdxy_vtxD0_BS'
+        hDic['sigdxy_vtxD0_BS']['data'].GetXaxis().SetTitle('sigdxy_vtxD0_BS')
+        hDic['sigdxy_vtxD0_BS']['data'].GetYaxis().SetTitle('Events')
+        cAux = plot_SingleCategory(CMS_lumi, hDic['sigdxy_vtxD0_BS'], draw_pulls=True, pullsRatio=True, scale_dic=scale_dic,
+                                   addText='Cat. '+catName, logy=False, legBkg=True,
+                                   min_y=1, tag=tag+'sigdxy_vtxD0_BS', legLoc=[0.65, 0.4, 0.9, 0.75])
+        cAux.SaveAs(webFolder+'/sigdxy_vtxD0_BS_'+tag+'.png')
+        outCanvas.append(cAux)
+
+    if 'PV_ndof' in hDic.keys():
+        print 'Drawing PV_ndof'
+        hDic['PV_ndof']['data'].GetXaxis().SetTitle('PV ndof')
+        hDic['PV_ndof']['data'].GetYaxis().SetTitle('Events')
+        cAux = plot_SingleCategory(CMS_lumi, hDic['PV_ndof'], draw_pulls=True, pullsRatio=True, scale_dic=scale_dic,
+                                   addText='Cat. '+catName, logy=False, legBkg=True,
+                                   min_y=1, tag=tag+'PV_ndof', legLoc=[0.65, 0.4, 0.9, 0.75])
+        cAux.SaveAs(webFolder+'/PV_ndof_'+tag+'.png')
+        outCanvas.append(cAux)
+
+    if 'PV_chi2' in hDic.keys():
+        print 'Drawing PV_chi2'
+        hDic['PV_chi2']['data'].GetXaxis().SetTitle('PV chi2')
+        hDic['PV_chi2']['data'].GetYaxis().SetTitle('Events')
+        cAux = plot_SingleCategory(CMS_lumi, hDic['PV_chi2'], draw_pulls=True, pullsRatio=True, scale_dic=scale_dic,
+                                   addText='Cat. '+catName, logy=False, legBkg=True,
+                                   min_y=1, tag=tag+'PV_chi2', legLoc=[0.65, 0.4, 0.9, 0.75])
+        cAux.SaveAs(webFolder+'/PV_chi2_'+tag+'.png')
+        outCanvas.append(cAux)
 
     if 'PV_pval' in hDic.keys():
         print 'Drawing PV_pval'
