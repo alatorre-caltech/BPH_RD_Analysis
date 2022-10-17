@@ -829,7 +829,7 @@ serial or jobs."""
         if args.skip_cut == 'all':
             sc = 'all'
         for n, fp in file_loc.iteritems():
-            create_dSet(n, fp, cat=None, args.skim_tag, args.parallel_type, skipCut=sc, applyCorrections=args.apply_corr, maxEvents=args.max_events)
+            create_dSet(n, fp, None, args.skim_tag, args.parallel_type, skipCut=sc, applyCorrections=args.apply_corr, maxEvents=args.max_events)
 
     else:
         skip = []

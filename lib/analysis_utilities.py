@@ -13,7 +13,7 @@ import operator
 ops = {'>': operator.gt, '<': operator.lt, }
 
 # Latest ntuple tag. This tag contains a fix for the impact parameter uncertianty on MC
-NTUPLE_TAG = 'fix_dxy_error_v4'
+NTUPLE_TAG = '220608_covaFix_vtxpval0p5'
 
 class bcolors:
     HEADER = '\033[95m'
