@@ -36,23 +36,6 @@ except ImportError:
     print >> sys.stderr, "Did you remember to source the env.sh file in the repo?"
     sys.exit(1)
 
-import argparse
-parser = argparse.ArgumentParser()
-#Example: python B2JpsiKst_skimCAND_v1.py -d MC --maxEvents 80000
-parser.add_argument ('--function', type=str, default='main', help='Function to perform')
-parser.add_argument ('-d', '--dataset', type=str, default=[], help='Dataset(s) to run on or regular expression for them', nargs='+')
-parser.add_argument ('--skimTag', type=str, default='', help='Tag to append at the name of the skimmed files directory')
-parser.add_argument ('-p', '--parallel-type', choices=['pool', 'jobs', 'serial', 'none'], default='jobs', help='Function to perform')
-parser.add_argument ('--maxEvents', type=int, default=1e15, help='Max number of events to be processed')
-parser.add_argument ('-f','--recreate', default=False, action='store_true', help='Recreate even if file already present')
-parser.add_argument ('--applyCorr', default=True, type=str2bool, help='Switch to apply crrections')
-parser.add_argument ('-c','--cat', type=str, default=['low', 'mid', 'high'], choices=['single', 'low', 'mid', 'high', 'probe', 'none'], help='Category(ies)', nargs='+')
-parser.add_argument ('--skipCut', type=str, default='', choices=['all', '7'], help='Cut to skip')
-######## Arguments not for user #####################
-parser.add_argument ('--tmpDir', type=str, default=None, help='Temporary directory')
-parser.add_argument ('--jN', type=int, default=None, help='Job number')
-args = parser.parse_args()
-
 #############################################################################
 ####                          Datset declaration                         ####
 #############################################################################
@@ -476,7 +459,7 @@ def makeSelection(inputs):
         print tag, ': done'
     return [output, N_accepted_cand]
 
-def create_dSet(n, filepath, cat, applyCorrections=False, skipCut=[], maxEvents=args.maxEvents):
+def create_dSet(n, filepath, cat, skim_tag, parallel_type, applyCorrections=False, skipCut=[], maxEvents=1e15):
     if cat is None:
         catName = 'None'
     else:
@@ -484,7 +467,7 @@ def create_dSet(n, filepath, cat, applyCorrections=False, skipCut=[], maxEvents=
     print '\n' + 50*'-'
     print n, catName
     if 'data' in n:
-        loc = '/storage/af/group/rdst_analysis/BPhysics/data/cmsRD/skimmed'+args.skimTag+'/B2JpsiKst'+ n.replace('data', '')
+        loc = '/storage/af/group/rdst_analysis/BPhysics/data/cmsRD/skimmed'+skim_tag+'/B2JpsiKst'+ n.replace('data', '')
         # out = re.search('2[12][01][1-9][0-3][0-9]', filepath)
         # if out is None:
         #     print filepath
@@ -500,7 +483,7 @@ def create_dSet(n, filepath, cat, applyCorrections=False, skipCut=[], maxEvents=
 
         N_evts_per_job = 40000
     else:
-        d = os.path.dirname(filepath) + '/skimmed'+args.skimTag+'/'
+        d = os.path.dirname(filepath) + '/skimmed'+skim_tag+'/'
         if not os.path.isdir(d):
             os.makedirs(d)
         fskimmed_name = d + catName
@@ -633,7 +616,7 @@ def create_dSet(n, filepath, cat, applyCorrections=False, skipCut=[], maxEvents=
             if 'data' in n:
                 applyCorr = 'RD'
 
-        if args.parallel_type == 'serial':
+        if parallel_type == 'serial':
             output, N_accepted_cand = makeSelection([n, '', filenames, leafs_names, cat,
                                                      [0, N_cand_in-1], applyCorr, skipCut, True])
         else:
@@ -650,10 +633,10 @@ def create_dSet(n, filepath, cat, applyCorrections=False, skipCut=[], maxEvents=
             print ' '
 
             start = time.time()
-            if args.parallel_type == 'pool':
+            if parallel_type == 'pool':
                 p = Pool(min(20,len(inputs)))
                 outputs = p.map(makeSelection, inputs)
-            elif args.parallel_type == 'jobs':
+            elif parallel_type == 'jobs':
                 tmpDir = 'tmp/B2JpsiKst_skimCAND_%s_%s' % (n,catName)
                 if applyCorrections:
                     tmpDir += '_corr'
@@ -788,51 +771,83 @@ def createSubmissionFile(tmpDir, njobs):
     fsub.close()
 
 if __name__ == "__main__":
-    if args.function == 'main':
-        file_loc = {}
-        for n in args.dataset:
-            for kn in filesLocMap.keys():
-                if not re.match(n, kn) is None:
-                    print 'Adding', kn
-                    file_loc[kn] = filesLocMap[kn]
-        if len(file_loc.keys()) == 0:
-            print 'No dataset provided'
-            exit()
+    import argparse
 
-        recreate = []
-        if args.recreate:
-            recreate = file_loc.keys()
-        print '-'*50 + '\n'
+    parser = argparse.ArgumentParser()
+    #Example: python B2JpsiKst_skimCAND_v1.py -d MC --max-events 80000
+    parser.add_argument('--make-sel', default=False, action='store_true', help='make selection')
+    parser.add_argument('-d', '--dataset', type=str, default=[], help='Dataset(s) to run on or regular expression for them', nargs='+')
+    parser.add_argument('-s', '--skim-tag', type=str, default='', help='Tag to append at the name of the skimmed files directory')
+    parser.add_argument('-p', '--parallel-type', choices=['pool', 'jobs', 'serial', 'none'], default='jobs', help='Function to perform')
+    parser.add_argument('--max-events', type=int, default=1e15, help='Max number of events to be processed')
+    parser.add_argument('-f','--recreate', default=False, action='store_true', help='Recreate even if file already present')
+    parser.add_argument('--apply-corr', default=True, type=str2bool, help='Switch to apply crrections')
+    parser.add_argument('-c','--cat', type=str, default=['low', 'mid', 'high'], choices=['single', 'low', 'mid', 'high', 'probe', 'none'], help='Category(ies)', nargs='+')
+    parser.add_argument('--skip-cut', type=str, default='', choices=['all', '7'], help='Cut to skip')
+    ######## Arguments not for user #####################
+    parser.add_argument('--tmp-dir', type=str, default=None, help='Temporary directory')
+    parser.add_argument('--job-number', type=int, default=None, help='Job number')
+    args = parser.parse_args()
 
-        if 'none' in args.cat:
-            print 'Running w/o category (ignoring other categories)'
-            sc = []
-            if args.skipCut == 'all':
-                sc = 'all'
-            for n, fp in file_loc.iteritems():
-                    create_dSet(n, fp, cat=None, skipCut=sc, applyCorrections=args.applyCorr)
+    if sys.version_info[0] > 2:
+        print_warning("Must use Python 2")
+        sys.exit(1)
 
-        else:
-            skip = []
-            if args.skipCut == 'all':
-                skip.append('all')
-            # skip.append([6, 11, 12]) #Mass D0, D* and D*-D0 (m piK)
-            # skip.append([16]) #Visible mass (m D0pismu)
-            # skip.append([17]) #Additional tracks
-            elif args.skipCut:
-                skip.append([int(args.skipCut)])
-            else:
-                skip.append([])
+    if args.parallel_type != 'jobs':
+        warning = \
+"""Warning: The current Tier2 nodes at Caltech are running Alma Linux 8, and
+there is no compiled version of CMSSW 10.2.3 for this operating system.
+Therefore, we need to run basically everything in a singularity container.
+Right now, this script is only set up to do that with jobs submitted via
+condor, so unless you are running in a VM you shouldn't set parallel_type to
+serial or jobs."""
+        print_warning(warning)
+        time.sleep(10)
 
-            for idx in skip:
-                for cn in args.cat:
-                    for n, fp in file_loc.iteritems():
-                        create_dSet(n, fp, categories[cn], skipCut=idx, applyCorrections=args.applyCorr)
-    elif args.function == 'makeSel':
-        tmpDir = args.tmpDir
-        input = pickle.load( open( tmpDir+'/input_{}.p'.format(args.jN), 'rb' ) )
+    if args.make_sel:
+        with open(join(args.tmp_dir,'input_%i.p' % args.job_number), 'rb') as f:
+            input = pickle.load(f)
         output = makeSelection(input)
-        pickle.dump(output, open( tmpDir+'/output_{}.p'.format(args.jN), 'wb' ) )
+        with open(join(args.tmp_dir,'output_%i.p' % args.job_number), 'wb') as f:
+            pickle.dump(output, f)
+        sys.exit(0)
+
+    file_loc = {}
+    for n in args.dataset:
+        for kn in filesLocMap.keys():
+            if not re.match(n, kn) is None:
+                print 'Adding', kn
+                file_loc[kn] = filesLocMap[kn]
+    if len(file_loc.keys()) == 0:
+        print 'No dataset provided'
+        exit()
+
+    recreate = []
+    if args.recreate:
+        recreate = file_loc.keys()
+    print '-'*50 + '\n'
+
+    if 'none' in args.cat:
+        print 'Running w/o category (ignoring other categories)'
+        sc = []
+        if args.skip_cut == 'all':
+            sc = 'all'
+        for n, fp in file_loc.iteritems():
+            create_dSet(n, fp, cat=None, args.skim_tag, args.parallel_type, skipCut=sc, applyCorrections=args.apply_corr, maxEvents=args.max_events)
 
     else:
-        print args.function, 'not recognized'
+        skip = []
+        if args.skip_cut == 'all':
+            skip.append('all')
+        # skip.append([6, 11, 12]) #Mass D0, D* and D*-D0 (m piK)
+        # skip.append([16]) #Visible mass (m D0pismu)
+        # skip.append([17]) #Additional tracks
+        elif args.skip_cut:
+            skip.append([int(args.skip_cut)])
+        else:
+            skip.append([])
+
+        for idx in skip:
+            for cn in args.cat:
+                for n, fp in file_loc.iteritems():
+                    create_dSet(n, fp, categories[cn], args.skim_tag, args.parallel_type, skipCut=idx, applyCorrections=args.apply_corr, maxEvents=args.max_events)
