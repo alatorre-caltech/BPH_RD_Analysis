@@ -719,7 +719,7 @@ def loadDatasets(category, loadRD, args):
         # ['ctrl_pm_massVisTks', 0, 3.8],
         # ['ctrl_pm_massHadTks', 2.6, 10],
         # ['ctrl_pm_index', 3, 0],
-        ['sigdxy_vtxD0_PV',10,1e3],
+        ['sigdxy_vtxD0_BS',10,1e3],
         ]
 
         if args.use_mva and not args.unblinded:
@@ -4358,8 +4358,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Script used to run combine on the R(D*) analysis.', epilog='Example: ./runCombine.py -c low', add_help=True)
     parser.add_argument('-v', '--card-tag', default='test_', help='Card name initial tag.')
     parser.add_argument('-c', '--category', type=str, default='high', choices=['single', 'low', 'mid', 'high', 'comb'], help='Category.')
-    parser.add_argument('-s', '--skim-tag', default='_no_pval_sel_v2', type=str, help='Tag to append to the skimmed directory.')
-    parser.add_argument('--skim-tag-rd', default=None, type=str, help='Tag to append to the skimmed directory for data.')
+    parser.add_argument('-s', '--skim-tag', default='test', type=str, help='Tag to append to the skimmed directory.')
+    parser.add_argument('--skim-tag-rd', default='test', type=str, help='Tag to append to the skimmed directory for data.')
     parser.add_argument('--bare-mc', action='store_true', help='Use bare MC instead of the corrected one.')
     parser.add_argument('--max-events', default=None, type=int, help='Max number of MC events to load per sample.')
     parser.add_argument('--cal-b-pt', action='store_true', help='include B pt corrections')
@@ -4643,20 +4643,20 @@ if __name__ == "__main__":
                                                    args.category.capitalize(),
                                                    args,
                                                    maskStr=maskStr,
-                                                   rLimits=rLimits, strategy=args.strategy, draw=True, dumpNuis=True)
+                                                   rLimits=rLimits, strategy=args.scan_strategy, draw=True, dumpNuis=True)
         elif args.scan_tag:
             fit_RDst, rDst_postFitRegion = runScan(args.scan_tag, card_location.replace('.txt', '_fitRegionsOnly.txt'), outdir,
                                                    args.category.capitalize(),
                                                    args,
                                                    freezePars=args.freeze_pars_scan,
                                                    rLimits=rLimits,
-                                                   strategy=args.strategy, draw=True, dumpNuis=True)
+                                                   strategy=args.scan_strategy, draw=True, dumpNuis=True)
         else:
             fit_RDst, rDst_postFitRegion = runScan('Base', card_location.replace('.txt', '_fitRegionsOnly.txt'), outdir,
                                                    args.category.capitalize(),
                                                    args,
                                                    rLimits=rLimits,
-                                                   strategy=args.strategy, draw=True, dumpNuis=True)
+                                                   strategy=args.scan_strategy, draw=True, dumpNuis=True)
     else:
         rDst_postFitRegion = args.rdst_lims if len(args.rdst_lims) == 2 else [0.1, 0.5]
         fit_RDst = SM_RDst

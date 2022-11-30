@@ -17,16 +17,23 @@ import ROOT.RooFit as rf
 from scipy.special import erf
 import sys, os
 import itertools
-sys.path.append('../lib')
-if os.environ['CMSSW_VERSION'] != 'CMSSW_10_2_3':
-    raise
-from histo_utilities import create_TH1D, create_TH2D, std_color_list, SetMaxToMaxHist, make_ratio_plot
-from cebefo_style import Set_2D_colz_graphics
-from progressBar import ProgressBar
 
-from analysis_utilities import drawOnCMSCanvas, extarct, extarct_multiple, createSel, load_data, NTUPLE_TAG
-from lumi_utilities import getLumiByTrigger
-from pileup_utilities import pileupReweighter
+try:
+    from histo_utilities import create_TH1D, create_TH2D, std_color_list, SetMaxToMaxHist, make_ratio_plot
+    from cebefo_style import Set_2D_colz_graphics
+    from progressBar import ProgressBar
+
+    from analysis_utilities import drawOnCMSCanvas, extarct, extarct_multiple, createSel, load_data, NTUPLE_TAG, print_warning
+    from lumi_utilities import getLumiByTrigger
+    from pileup_utilities import pileupReweighter
+except ImportError:
+    print >> sys.stderr, "Failed to import analysis_utilities."
+    print >> sys.stderr, "Did you remember to source the env.sh file in the repo?"
+    sys.exit(1)
+
+if os.environ['CMSSW_VERSION'] != 'CMSSW_10_2_3':
+    print_warning("Must be running CMSSW version 10.2.3!")
+    sys.exit(1)
 
 import CMS_lumi, tdrstyle
 tdrstyle.setTDRStyle()

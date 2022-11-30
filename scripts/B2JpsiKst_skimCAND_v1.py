@@ -8,6 +8,7 @@ import itertools
 import json
 from multiprocessing import Pool
 import commands
+from os.path import join
 
 import numpy as np
 import pandas as pd
@@ -782,7 +783,7 @@ if __name__ == "__main__":
     parser.add_argument('--skip-cut', type=str, default='', choices=['all', '7'], help='Cut to skip')
     ######## Arguments not for user #####################
     parser.add_argument('--tmp-dir', type=str, default=None, help='Temporary directory')
-    parser.add_argument('--job-number', type=int, default=None, help='Job number')
+    parser.add_argument('-j', '--job-number', type=int, default=None, help='Job number')
     args = parser.parse_args()
 
     if sys.version_info[0] > 2:

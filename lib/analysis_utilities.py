@@ -8,12 +8,13 @@ import yaml
 import os
 from os.path import join, expanduser, exists, abspath
 import pickle
+import sys
 
 import operator
 ops = {'>': operator.gt, '<': operator.lt, }
 
 # Latest ntuple tag. This tag contains a fix for the impact parameter uncertianty on MC
-NTUPLE_TAG = '220608_covaFix_vtxpval0p5'
+NTUPLE_TAG = 'beamspot-constraint'
 
 class bcolors:
     HEADER = '\033[95m'
@@ -33,18 +34,33 @@ def load_yaml(filename):
     with open(filename,'r') as f:
         return yaml.safe_load(f)
 
-def check_file(fn):
+def check_file(fn, ask=False):
     """
-    Check whether a ROOT file is broken or wasn't closed properly, and if so,
-    ask the user whether to delete it.
+    Check whether a ROOT file is broken or wasn't closed properly.  If `ask` is
+    True, will prompt the user for any broken file and ask the user if they
+    want to delete the file or skip it. If `ask` is False, it just defaults to
+    skipping.
 
-    Returns True if the file is OK, or False if the file is deleted.
+    Returns True if the file is OK, or False if the file wasn't closed properly.
     """
     f = rt.TFile.Open(fn, 'READ')
+
+    if not ask:
+        if f is None or f.IsZombie() or f.TestBit(rt.TFile.kRecovered):
+            print_warning("File '%s' wasn't closed properly. Skipping..." % fn)
+            f.Close()
+            return False
+        if not f.GetListOfKeys().Contains("outA") or not f.Get("outA").GetListOfKeys().Contains("Tevts"):
+            print_warning("File '%s' doesn't have the TTree outA/Tevts. Skipping..." % fn)
+            f.Close()
+            return False
+        f.Close()
+        return True
+
     if f is None or f.IsZombie() or f.TestBit(rt.TFile.kRecovered):
         answer = None
         while answer not in ('y','n','s'):
-            print "Delete file '%s' which wasn't closed properly? [y/n/s]" % fn
+            print_warning("Delete file '%s' which wasn't closed properly? [y/n/s]" % fn)
             answer = raw_input()
         if answer == 'y':
             f.Close()
@@ -56,7 +72,7 @@ def check_file(fn):
     if not f.GetListOfKeys().Contains("outA") or not f.Get("outA").GetListOfKeys().Contains("Tevts"):
         answer = None
         while answer not in ('y','n','s'):
-            print "Delete file '%s' which doesn't have the TTree outA/Tevts? [y/n/s]" % fn
+            print_warning("Delete file '%s' which doesn't have the TTree outA/Tevts? [y/n/s]" % fn)
             answer = raw_input()
         if answer == 'y':
             f.Close()

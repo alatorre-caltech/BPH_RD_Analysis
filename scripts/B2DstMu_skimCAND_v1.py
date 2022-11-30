@@ -1029,7 +1029,7 @@ def makeSelection(inputs):
                     print 'Dst mother:', m_Dst
                     print 'Raw decay list:', decayRawList
                     print ' '.join([str(int(x)) for x in ev.MC_decay])
-                    raise
+                    #raise
 
                 aux += (process,)
             ev_output.append(aux)
@@ -1400,6 +1400,11 @@ leafs_names, cat,
 
                         # Try to free up as much memory as possible
                         gc.collect()
+
+                print 'Deleting temporary files...',
+                os.system('rm -rf ' + tmpDir + '/out')
+                os.system('rm -rf ' + tmpDir + '/*.p')
+                print 'done'
 
             print 'Total time: {:.1f} min'.format((time.time()-start)/60.)
 
