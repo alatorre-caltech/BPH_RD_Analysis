@@ -912,22 +912,22 @@ def makeSelection(inputs):
                     process = 103
                 elif (m_Dst == 511 and sis_c == 423 and sis_s == 323):
                     process = 104
-                elif (m_Dst == 511 and sis_c == 413 and sis_s == 311):
+                elif (m_Dst == 511 and sis_c == 413 and sis_s == 311 and m_mu == 421):
                     process = 105 # 1.5, 1.8
-                elif (m_Dst == 511 and sis_c == 413 and sis_s == 313):
+                elif (m_Dst == 511 and sis_c == 413 and sis_s == 313 and m_mu == 421):
                     process = 106 # 1.6, 1.9
-                elif (m_Dst == 511 and sis_c == 413 and sis_s == 0):
+                elif (m_Dst == 511 and sis_c == 413 and sis_s == 0 and m_mu == 421):
                     process = 107 # 1.7, 1.10
 
                 elif (m_Dst == 511 and sis_c == 411 and sis_s == 311):
                     process = 201 # 2.1, 2.2
                 elif (m_Dst == 511 and sis_c == 411 and sis_s == 313):
                     process = 203 # 2.3, 2.4
-                elif (m_Dst == 511 and sis_c == 413 and sis_s == 311):
+                elif (m_Dst == 511 and sis_c == 413 and sis_s == 311 and m_mu == 411):
                     process = 205 # 2.5, 2.8
-                elif (m_Dst == 511 and sis_c == 413 and sis_s == 313):
+                elif (m_Dst == 511 and sis_c == 413 and sis_s == 313 and m_mu == 411):
                     process = 206 # 2.6, 2.9
-                elif (m_Dst == 511 and sis_c == 413 and sis_s == 0):
+                elif (m_Dst == 511 and sis_c == 413 and sis_s == 0 and m_mu == 411):
                     process = 207 # 2.7, 2.10
                 elif (m_Dst == 511 and sis_c == 411 and sis_s == 0):
                     process = 211 # 2.11, 2.12
@@ -947,9 +947,9 @@ def makeSelection(inputs):
                     process = 403
                 elif (m_Dst == 521 and sis_c == 423 and sis_s == 313):
                     process = 404
-                elif (m_Dst == 521 and sis_c == 413 and sis_s == 321):
+                elif (m_Dst == 521 and sis_c == 413 and sis_s == 321 and m_mu == 421):
                     process = 405 # 4.5, 4.7
-                elif (m_Dst == 521 and sis_c == 413 and sis_s == 323):
+                elif (m_Dst == 521 and sis_c == 413 and sis_s == 323 and m_mu == 421):
                     process = 406 # 4.6, 4.8
                 elif (m_Dst == 521 and sis_c == 421 and sis_s == 0):
                     process = 409
@@ -965,9 +965,9 @@ def makeSelection(inputs):
                     process = 501 # 5.1, 5.3
                 elif (m_Dst == 521 and sis_c == 411 and sis_s == 323):
                     process = 502 # 5.2, 5.4
-                elif (m_Dst == 521 and sis_c == 413 and sis_s == 321):
+                elif (m_Dst == 521 and sis_c == 413 and sis_s == 321 and m_mu == 411):
                     process = 505 # 5.5, 5.7
-                elif (m_Dst == 521 and sis_c == 413 and sis_s == 323):
+                elif (m_Dst == 521 and sis_c == 413 and sis_s == 323 and m_mu == 411):
                     process = 506 # 5.6, 5.8
                 # Not present in our MC
                 # B+ -> D* D_s* (Cabibbo soppressed)
@@ -1030,6 +1030,8 @@ def makeSelection(inputs):
                     print 'Raw decay list:', decayRawList
                     print ' '.join([str(int(x)) for x in ev.MC_decay])
                     #raise
+
+                    process = -102
 
                 aux += (process,)
             ev_output.append(aux)
