@@ -47,8 +47,8 @@ import gc
 # interpolation and extrapolation to guess at the values of the histogram for
 # different smearings. If the best fit values come close to these it means that
 # Combine doesn't have to interpolate/extrapolate too far.
-B_VTX_STD_X = 0.001
-B_VTX_STD_Y = 0.001
+B_VTX_STD_X = 0.0001
+B_VTX_STD_Y = 0.0001
 B_VTX_STD_Z = 0.001
 
 #############################################################################
@@ -263,64 +263,66 @@ def extractEventInfos(j, ev, corr=None):
 
     bestVtx = rt.TVector3(ev.vtx_PV_x[j], ev.vtx_PV_y[j], ev.vtx_PV_z[j])
     smearedVtx = rt.TVector3(bestVtx)
-    smearedVtx.SetX(bestVtx.x() + np.random.randn()*B_VTX_STD_X)
-    smearedVtx.SetY(bestVtx.y() + np.random.randn()*B_VTX_STD_Y)
-    smearedVtx.SetZ(bestVtx.z() + np.random.randn()*B_VTX_STD_Z)
 
-    # Calculate B momentum from primary vertex by smearing the primary
-    # vertex in the x, y, and z directions. This is essentially doing the
-    # same calculation as in B2DstMuDecayTreeProducer.cc.
-    #
-    # Here, for the "down" systematic, we *don't* smear the vertex in one
-    # particular direction.
-    for attr in ['x','y','z']:
-        vtx = rt.TVector3(smearedVtx)
-        if attr == 'x':
-            vtx.SetX(bestVtx.x())
-        elif attr == 'y':
-            vtx.SetY(bestVtx.y())
-        elif attr == 'z':
-            vtx.SetZ(bestVtx.z())
-        vtxB = rt.TVector3(ev.vtx_B_decay_x[j], ev.vtx_B_decay_y[j], ev.vtx_B_decay_z[j])
-        flightB = rt.TVector3(vtxB.x() - vtx.x(), vtxB.y() - vtx.y(), vtxB.z() - vtx.z())
-        B_vect = flightB*(e.B_pt/flightB.Perp())
-        p4_B = rt.TLorentzVector()
-        p4_B.SetVectM(B_vect, m_B0)
+    if hasattr(ev, 'MC_addTkFlag'):
+        smearedVtx.SetX(bestVtx.x() + np.random.randn()*B_VTX_STD_X)
+        smearedVtx.SetY(bestVtx.y() + np.random.randn()*B_VTX_STD_Y)
+        smearedVtx.SetZ(bestVtx.z() + np.random.randn()*B_VTX_STD_Z)
 
-        setattr(e,'M2_miss_%sDown' % attr,(p4_B - p4_vis).M2())
-        setattr(e,'U_miss_%sDown' % attr,(p4_B - p4_vis).E() - (p4_B - p4_vis).P())
-        setattr(e,'q2_%sDown' % attr,(p4_B - p4_Dst).M2())
+        # Calculate B momentum from primary vertex by smearing the primary
+        # vertex in the x, y, and z directions. This is essentially doing the
+        # same calculation as in B2DstMuDecayTreeProducer.cc.
+        #
+        # Here, for the "down" systematic, we *don't* smear the vertex in one
+        # particular direction.
+        for attr in ['x','y','z']:
+            vtx = rt.TVector3(smearedVtx)
+            if attr == 'x':
+                vtx.SetX(bestVtx.x())
+            elif attr == 'y':
+                vtx.SetY(bestVtx.y())
+            elif attr == 'z':
+                vtx.SetZ(bestVtx.z())
+            vtxB = rt.TVector3(ev.vtx_B_decay_x[j], ev.vtx_B_decay_y[j], ev.vtx_B_decay_z[j])
+            flightB = rt.TVector3(vtxB.x() - vtx.x(), vtxB.y() - vtx.y(), vtxB.z() - vtx.z())
+            B_vect = flightB*(e.B_pt/flightB.Perp())
+            p4_B = rt.TLorentzVector()
+            p4_B.SetVectM(B_vect, m_B0)
 
-        p4st_mu = rt.TLorentzVector(p4_mu)
-        p4st_mu.Boost(-1*p4_B.BoostVector())
-        setattr(e,'Est_mu_%sDown' % attr,p4st_mu.E())
+            setattr(e,'M2_miss_%sDown' % attr,(p4_B - p4_vis).M2())
+            setattr(e,'U_miss_%sDown' % attr,(p4_B - p4_vis).E() - (p4_B - p4_vis).P())
+            setattr(e,'q2_%sDown' % attr,(p4_B - p4_Dst).M2())
 
-    # Calculate B momentum from primary vertex by smearing the primary
-    # vertex in the x, y, and z directions. This is essentially doing the
-    # same calculation as in B2DstMuDecayTreeProducer.cc.
-    #
-    # Here, for the "up" systematic, we add additional smearing.
-    for attr in ['x','y','z']:
-        vtx = rt.TVector3(smearedVtx)
-        if attr == 'x':
-            vtx.SetX(vtx.x() + np.random.randn()*B_VTX_STD_X)
-        elif attr == 'y':
-            vtx.SetY(vtx.y() + np.random.randn()*B_VTX_STD_Y)
-        elif attr == 'z':
-            vtx.SetZ(vtx.z() + np.random.randn()*B_VTX_STD_Z)
-        vtxB = rt.TVector3(ev.vtx_B_decay_x[j], ev.vtx_B_decay_y[j], ev.vtx_B_decay_z[j])
-        flightB = rt.TVector3(vtxB.x() - vtx.x(), vtxB.y() - vtx.y(), vtxB.z() - vtx.z())
-        B_vect = flightB*(e.B_pt/flightB.Perp())
-        p4_B = rt.TLorentzVector()
-        p4_B.SetVectM(B_vect, m_B0)
+            p4st_mu = rt.TLorentzVector(p4_mu)
+            p4st_mu.Boost(-1*p4_B.BoostVector())
+            setattr(e,'Est_mu_%sDown' % attr,p4st_mu.E())
 
-        setattr(e,'M2_miss_%sUp' % attr,(p4_B - p4_vis).M2())
-        setattr(e,'U_miss_%sUp' % attr,(p4_B - p4_vis).E() - (p4_B - p4_vis).P())
-        setattr(e,'q2_%sUp' % attr,(p4_B - p4_Dst).M2())
+        # Calculate B momentum from primary vertex by smearing the primary
+        # vertex in the x, y, and z directions. This is essentially doing the
+        # same calculation as in B2DstMuDecayTreeProducer.cc.
+        #
+        # Here, for the "up" systematic, we add additional smearing.
+        for attr in ['x','y','z']:
+            vtx = rt.TVector3(smearedVtx)
+            if attr == 'x':
+                vtx.SetX(vtx.x() + np.random.randn()*B_VTX_STD_X)
+            elif attr == 'y':
+                vtx.SetY(vtx.y() + np.random.randn()*B_VTX_STD_Y)
+            elif attr == 'z':
+                vtx.SetZ(vtx.z() + np.random.randn()*B_VTX_STD_Z)
+            vtxB = rt.TVector3(ev.vtx_B_decay_x[j], ev.vtx_B_decay_y[j], ev.vtx_B_decay_z[j])
+            flightB = rt.TVector3(vtxB.x() - vtx.x(), vtxB.y() - vtx.y(), vtxB.z() - vtx.z())
+            B_vect = flightB*(e.B_pt/flightB.Perp())
+            p4_B = rt.TLorentzVector()
+            p4_B.SetVectM(B_vect, m_B0)
 
-        p4st_mu = rt.TLorentzVector(p4_mu)
-        p4st_mu.Boost(-1*p4_B.BoostVector())
-        setattr(e,'Est_mu_%sUp' % attr,p4st_mu.E())
+            setattr(e,'M2_miss_%sUp' % attr,(p4_B - p4_vis).M2())
+            setattr(e,'U_miss_%sUp' % attr,(p4_B - p4_vis).E() - (p4_B - p4_vis).P())
+            setattr(e,'q2_%sUp' % attr,(p4_B - p4_Dst).M2())
+
+            p4st_mu = rt.TLorentzVector(p4_mu)
+            p4st_mu.Boost(-1*p4_B.BoostVector())
+            setattr(e,'Est_mu_%sUp' % attr,p4st_mu.E())
 
     # Now, for the default values we use the smeared vertex
     vtxB = rt.TVector3(ev.vtx_B_decay_x[j], ev.vtx_B_decay_y[j], ev.vtx_B_decay_z[j])
@@ -391,11 +393,11 @@ def extractEventInfos(j, ev, corr=None):
     for jj in range(idx_st, idx_stop):
         pval = ev.tksAdd_pval[jj]
         # Leave to 5% required in ntuplizer
-        # if pval < 0.1:
-        #     continue
-
-        if ev.tksAdd_lostInnerHits[jj] > 0:
+        if pval < 0.1:
             continue
+
+        #if ev.tksAdd_lostInnerHits[jj] > 0:
+        #    continue
 
         eta = ev.tksAdd_eta[jj]
         if np.abs(eta) >= 2.4:
@@ -653,12 +655,6 @@ def makeSelection(inputs):
 
             aux = (ev.runNum, ev.lumiNum, ev.eventNum, ev.LumiBlock,
                    evEx.q2, evEx.Est_mu, evEx.M2_miss, evEx.U_miss,
-                   evEx.q2_xUp, evEx.Est_mu_xUp, evEx.M2_miss_xUp, evEx.U_miss_xUp,
-                   evEx.q2_yUp, evEx.Est_mu_yUp, evEx.M2_miss_yUp, evEx.U_miss_yUp,
-                   evEx.q2_zUp, evEx.Est_mu_zUp, evEx.M2_miss_zUp, evEx.U_miss_zUp,
-                   evEx.q2_xDown, evEx.Est_mu_xDown, evEx.M2_miss_xDown, evEx.U_miss_xDown,
-                   evEx.q2_yDown, evEx.Est_mu_yDown, evEx.M2_miss_yDown, evEx.U_miss_yDown,
-                   evEx.q2_zDown, evEx.Est_mu_zDown, evEx.M2_miss_zDown, evEx.U_miss_zDown,
                    evEx.q2_coll, evEx.Est_mu_coll, evEx.M2_miss_coll,
                    evEx.q2_prefit, evEx.Est_mu_prefit, evEx.M2_miss_prefit,
                    ev.mu_charge[j], evEx.prefit_mu_pt, evEx.mu_pt, evEx.mu_eta, evEx.mu_phi,
@@ -757,6 +753,12 @@ def makeSelection(inputs):
                     MC_B_pdgId = ev.MC_decay[2]
 
                 aux += (
+                        evEx.q2_xUp, evEx.Est_mu_xUp, evEx.M2_miss_xUp, evEx.U_miss_xUp,
+                        evEx.q2_yUp, evEx.Est_mu_yUp, evEx.M2_miss_yUp, evEx.U_miss_yUp,
+                        evEx.q2_zUp, evEx.Est_mu_zUp, evEx.M2_miss_zUp, evEx.U_miss_zUp,
+                        evEx.q2_xDown, evEx.Est_mu_xDown, evEx.M2_miss_xDown, evEx.U_miss_xDown,
+                        evEx.q2_yDown, evEx.Est_mu_yDown, evEx.M2_miss_yDown, evEx.U_miss_yDown,
+                        evEx.q2_zDown, evEx.Est_mu_zDown, evEx.M2_miss_zDown, evEx.U_miss_zDown,
                         ev.MC_nAddOgB, ev.MC_bestBB_dR, ev.MC_bestBB_dphi, ev.MC_bestBB_mass,
                         ev.MC_q2, ev.MC_Est_mu, ev.MC_M2_miss,
                         ev.MC_B_pt, ev.MC_B_eta, ev.MC_B_phi, ev.MC_B_ctau,
@@ -1156,12 +1158,6 @@ def create_dSet(n, filepath, cat, skim_tag, parallel_type, applyCorrections=Fals
 
         leafs_names = ['runNum', 'lumiNum', 'eventNum', 'lumiBlock',
                        'q2', 'Est_mu', 'M2_miss', 'U_miss',
-                       'q2_xUp', 'Est_mu_xUp', 'M2_miss_xUp', 'U_miss_xUp',
-                       'q2_yUp', 'Est_mu_yUp', 'M2_miss_yUp', 'U_miss_yUp',
-                       'q2_zUp', 'Est_mu_zUp', 'M2_miss_zUp', 'U_miss_zUp',
-                       'q2_xDown', 'Est_mu_xDown', 'M2_miss_xDown', 'U_miss_xDown',
-                       'q2_yDown', 'Est_mu_yDown', 'M2_miss_yDown', 'U_miss_yDown',
-                       'q2_zDown', 'Est_mu_zDown', 'M2_miss_zDown', 'U_miss_zDown',
                        'q2_coll', 'Est_mu_coll', 'M2_miss_coll',
                        'q2_prefit', 'Est_mu_prefit', 'M2_miss_prefit',
                        'mu_charge', 'prefit_mu_pt', 'mu_pt', 'mu_eta', 'mu_phi',
@@ -1243,6 +1239,12 @@ def create_dSet(n, filepath, cat, skim_tag, parallel_type, applyCorrections=Fals
                       ]
         if not 'data' in n:
             leafs_names += [
+                            'q2_xUp', 'Est_mu_xUp', 'M2_miss_xUp', 'U_miss_xUp',
+                            'q2_yUp', 'Est_mu_yUp', 'M2_miss_yUp', 'U_miss_yUp',
+                            'q2_zUp', 'Est_mu_zUp', 'M2_miss_zUp', 'U_miss_zUp',
+                            'q2_xDown', 'Est_mu_xDown', 'M2_miss_xDown', 'U_miss_xDown',
+                            'q2_yDown', 'Est_mu_yDown', 'M2_miss_yDown', 'U_miss_yDown',
+                            'q2_zDown', 'Est_mu_zDown', 'M2_miss_zDown', 'U_miss_zDown',
                             'MC_nAddOgB', 'MC_bestBB_dR', 'MC_bestBB_dphi', 'MC_bestBB_mass',
                             'MC_q2', 'MC_Est_mu', 'MC_M2_miss',
                             'MC_B_pt', 'MC_B_eta', 'MC_B_phi', 'MC_B_ctau',

@@ -34,7 +34,7 @@ from os.path import join, dirname
 
 try:
     from categoriesDef import categories as categoriesDef
-    from analysis_utilities import drawOnCMSCanvas, getEff, DSetLoader, str2bool, load_data, NTUPLE_TAG, load_yaml
+    from analysis_utilities import drawOnCMSCanvas, getEff, DSetLoader, str2bool, load_data, NTUPLE_TAG, load_yaml, print_warning
     from beamSpot_calibration import getBeamSpotCorrectionWeights
     from pT_calibration_reader import pTCalReader as kinCalReader
     from histo_utilities import create_TH1D, create_TH2D, std_color_list, make_ratio_plot
@@ -55,6 +55,9 @@ tdrstyle.setTDRStyle()
 CMS_lumi.writeExtraText = 1
 CMS_lumi.extraText = "     Preliminary"
 donotdelete = []
+
+TRIGGER_SCALE_FACTOR = 'beamspot-constraint-test'
+data_over_MC_overallNorm = 0.83
 
 # The tuples have the following columns:
 #     0. procId (set in B2DstMu_skimCAND_v1.py)
@@ -108,9 +111,6 @@ class bcolors:
     ENDC = '\033[0m'
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
-
-def print_warning(msg):
-    print >> sys.stderr, bcolors.FAIL + msg + bcolors.ENDC
 
 controlRegSel = {}
 def selfun__TkPlus(ds):
@@ -702,15 +702,15 @@ def loadDatasets(category, loadRD, args):
 
         addCuts += [
         ['mu_eta', -0.8, 0.8],
-        ['PV_pval', 0, 0.95],
+        # ['PV_pval', 0, 0.95],
         # ['mu_pt', 0, 20],
         # ['B_eta', -1., 1.],
         # ['pis_pt', 1., 1e3],
         # ['mu_db_iso04', 0, 80],
         ['mu_lostInnerHits', -2, 1],
-        ['K_lostInnerHits', -2, 1],
-        ['pi_lostInnerHits', -2, 1],
-        ['pis_lostInnerHits', -2, 1],
+        # ['K_lostInnerHits', -2, 1],
+        # ['pi_lostInnerHits', -2, 1],
+        # ['pis_lostInnerHits', -2, 1],
         ['mass_piK', 1.86483-0.035, 1.86483+0.035],
         ['deltaM_DstD', 0.14543-1.e-3, 0.14543+1.e-3],
         ['pval_D0pismu', 0.1, 1.0],
@@ -898,7 +898,7 @@ def createHistograms(category, args):
         decayBR = pickle.load(f)
 
     loc = dataDir+'/calibration/triggerScaleFactors/'
-    fTriggerSF = rt.TFile.Open(loc + 'HLT_' + category.trg + '_SF_v49.root', 'READ')
+    fTriggerSF = rt.TFile.Open(loc + 'HLT_' + category.trg + '_SF_%s.root' % TRIGGER_SCALE_FACTOR, 'READ')
     hTriggerSF = fTriggerSF.Get('hSF_HLT_' + category.trg)
     def computeTrgSF(ds, hSF, selection=None):
         trgSF = np.ones_like(ds['q2'])
@@ -946,11 +946,13 @@ def createHistograms(category, args):
         ptmax = hMuonIDSF.GetXaxis().GetXmax() - 0.01
         etamax = hMuonIDSF.GetYaxis().GetXmax() - 0.01
         x = np.column_stack((ds['MC_mu_pt'], ds['MC_mu_eta']))
-        if not selection is None:
+        if selection is not None:
             x = x[selection]
         for i, (pt, eta) in enumerate(x):
             ix = hMuonIDSF.GetXaxis().FindBin(min(pt, ptmax))
-            if ix == 0: ix = 1 #Remove underflows (Meaning that the MC matching failed)
+            if ix == 0:
+                # Remove underflows (Meaning that the MC matching failed)
+                ix = 1
             iy = hMuonIDSF.GetYaxis().FindBin(min(np.abs(eta), etamax))
             muonSF[i] = hMuonIDSF.GetBinContent(ix, iy)
             muonSFUnc[i] = hMuonIDSF.GetBinError(hMuonIDSF.GetBin(ix, iy))
@@ -1041,7 +1043,6 @@ def createHistograms(category, args):
 
     histo = {}
     eventCountingStr = {}
-    data_over_MC_overallNorm = 1.4
 
     ######################################################
     ########## Signal region
@@ -1133,7 +1134,7 @@ def createHistograms(category, args):
     # binning['U_miss'] = 4*[[30, -0.1, 0.18]]
     binning['B_pt'] = array('d', list({'Low': np.arange(10, 75, 2), 'Mid': np.arange(14, 90, 2), 'High': np.arange(18, 110, 2)}[category.name]))
     binning['dxy_vtxD0pismu_PV'] = array('d', list({'Low': np.arange(0, 10, 1), 'Mid': np.arange(0, 10, 1), 'High': np.arange(0, 10, 1)}[category.name]))
-    binning['sigdxy_vtxD0_BS'] = array('d', list({'Low': np.arange(0, 50, 1), 'Mid': np.arange(0, 50, 1), 'High': np.arange(0, 50, 1)}[category.name]))
+    binning['sigdxy_vtxD0_BS'] = array('d', list({'Low': np.arange(0, 100, 1), 'Mid': np.arange(0, 100, 1), 'High': np.arange(0, 100, 1)}[category.name]))
     binning['PV_ndof'] = array('d', list({'Low': np.linspace(0, 200, 100), 'Mid': np.linspace(0, 200, 100), 'High': np.linspace(0, 200, 100)}[category.name]))
     binning['PV_chi2'] = array('d', list({'Low': np.linspace(0, 200, 100), 'Mid': np.linspace(0, 200, 100), 'High': np.linspace(0, 200, 100)}[category.name]))
     binning['PV_pval'] = array('d', list({'Low': np.arange(0, 1, 0.01), 'Mid': np.arange(0, 1, 0.01), 'High': np.arange(0, 1, 0.01)}[category.name]))
@@ -1297,10 +1298,23 @@ def createHistograms(category, args):
             weights['purgeUwantedEvts'] = np.array(ds['procId_Dstst'] >= 0).astype(np.int)
             procId_Dstst = np.array(ds['procId_Dstst']).astype(np.int)
 
+            # FIXME: Do we need to calculate the rates ratio for the other
+            # processes?
             ratesRatio = np.ones(50)
             ratesRatio[1] = sMC.effCand['rate_den_D1']/sMC.effCand['rate_D1BLR_central']
             ratesRatio[2] = sMC.effCand['rate_den_D1st']/sMC.effCand['rate_D1stBLR_central']
             ratesRatio[3] = sMC.effCand['rate_den_D2st']/sMC.effCand['rate_D2stBLR_central']
+
+            number_invalid = np.count_nonzero(ds['procId_Dstst'] < 0)
+            if number_invalid > 0:
+                print_warning("Warning: There are %i events in the B -> Mu D* pi sample with a process id of less than zero!" % number_invalid)
+
+                # ratesRatio doesn't have an index for unknown events with
+                # procId_Dstst of -100. These events get a weight of 0 anyways,
+                # so we just set the FF weight to 1 to prevent an error.
+                # FIXME: Is there a better way to do this?
+                procId_Dstst[procId_Dstst < 0] = len(ratesRatio) - 1
+
             selDstst = np.logical_and(procId_Dstst >= 1, procId_Dstst <= 3)
             weights['B2DststFF'] = np.where(selDstst, ds['wh_Dstst_BLRCentral']*ratesRatio[procId_Dstst], 1.)
 
@@ -1362,6 +1376,7 @@ def createHistograms(category, args):
         if re.match('B[du]_MuDstPi\Z', n):
             print 'Including D**->D*Pi branching ratio and width variations'
 
+            # FIXME: should this include 0?
             weights['kill_slipped_in'] = np.where( np.logical_and(ds['procId_Dstst'] >= 0, ds['procId_Dstst'] <= 3), 1, 0)
             print 'Surviving after killing slipped in {:.3f}%'.format(100*np.sum(weights['kill_slipped_in'])/float(ds.shape[0]))
 
@@ -1405,6 +1420,12 @@ def createHistograms(category, args):
             print 'Including', n, 'mix variations'
             weights['kill_slipped_in'] = np.where( np.floor_divide(ds['procId_DstHc'], 100) == DstHc_sample_id[n], 1, 0)
             print 'Surviving after killing slipped in {:.3f}%'.format(100*np.sum(weights['kill_slipped_in'])/float(ds.shape[0]))
+
+            invalid_ids = ds['procId_DstHc'][np.floor_divide(ds['procId_DstHc'], 100) != DstHc_sample_id[n]]
+
+            values, counts = np.unique(invalid_ids, return_counts=True)
+
+            print_warning("invalid ids with counts: %s" % sorted(zip(values,counts),key=lambda x: x[1]))
 
             for proc_id, centralVal, relScale, inflateRate in uncertainties_DstHc_mix:
                 if np.floor_divide(proc_id, 100) != DstHc_sample_id[n]: continue
@@ -1695,6 +1716,17 @@ def createHistograms(category, args):
             ratesRatio[1] = sMC.effCand['rate_den_D1']/sMC.effCand['rate_D1BLR_central']
             ratesRatio[2] = sMC.effCand['rate_den_D1st']/sMC.effCand['rate_D1stBLR_central']
             ratesRatio[3] = sMC.effCand['rate_den_D2st']/sMC.effCand['rate_D2stBLR_central']
+
+            number_invalid = np.count_nonzero(ds['procId_Dstst'] < 0)
+            if number_invalid > 0:
+                print_warning("Warning: There are %i events in the B -> Mu D* pi sample with a process id of less than zero!" % number_invalid)
+
+                # ratesRatio doesn't have an index for unknown events with
+                # procId_Dstst of -100. These events get a weight of 0 anyways,
+                # so we just set the FF weight to 1 to prevent an error.
+                # FIXME: Is there a better way to do this?
+                procId_Dstst[procId_Dstst < 0] = len(ratesRatio) - 1
+
             selDstst = np.logical_and(procId_Dstst >= 1, procId_Dstst <= 3)
             weights['B2DststFF'] = np.where(selDstst, ds['wh_Dstst_BLRCentral']*ratesRatio[procId_Dstst], 1.)
 
