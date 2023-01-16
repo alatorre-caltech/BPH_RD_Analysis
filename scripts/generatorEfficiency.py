@@ -92,7 +92,7 @@ inDic['B_DstDXX'] = DSetLoader('B_DstDXX', candDir=candDir)
 ######## Others background
 # inDic['DstKu_KuToMu'] = DSetLoader('DstKu_KuToMu', candDir='ntuples_B2DstMu_211118')
 
-# inDic['JPsiKst'] = DSetLoader('Bd_JpsiKst_General', candDir='ntuples_Bd2JpsiKst_%s' % NTUPLE_TAG)
+inDic['JPsiKst'] = DSetLoader('Bd_JpsiKst_General', candDir='ntuples_Bd2JpsiKst_%s' % NTUPLE_TAG)
 # inDic['JPsiKst'] = DSetLoader('Bd_JpsiKst_General', candDir='ntuples_Bd2JpsiKst_220531')
 
 def getEff(k,N):

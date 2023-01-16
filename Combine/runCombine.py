@@ -34,7 +34,7 @@ from os.path import join, dirname
 
 try:
     from categoriesDef import categories as categoriesDef
-    from analysis_utilities import drawOnCMSCanvas, getEff, DSetLoader, str2bool, load_data, NTUPLE_TAG, load_yaml, print_warning
+    from analysis_utilities import drawOnCMSCanvas, getEff, DSetLoader, str2bool, load_data, NTUPLE_TAG, load_yaml, print_warning, TRIGGER_SCALE_FACTOR
     from beamSpot_calibration import getBeamSpotCorrectionWeights
     from pT_calibration_reader import pTCalReader as kinCalReader
     from histo_utilities import create_TH1D, create_TH2D, std_color_list, make_ratio_plot
@@ -56,7 +56,6 @@ CMS_lumi.writeExtraText = 1
 CMS_lumi.extraText = "     Preliminary"
 donotdelete = []
 
-TRIGGER_SCALE_FACTOR = 'beamspot-constraint'
 data_over_MC_overallNorm = 0.83
 
 # The tuples have the following columns:

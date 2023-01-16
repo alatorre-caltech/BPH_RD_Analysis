@@ -31,7 +31,7 @@ try:
     from beamSpot_calibration import getBeamSpotCorrectionWeights
 
     from categoriesDef import categories
-    from analysis_utilities import drawOnCMSCanvas, DSetLoader, str2bool, NTUPLE_TAG
+    from analysis_utilities import drawOnCMSCanvas, DSetLoader, str2bool, NTUPLE_TAG, TRIGGER_SCALE_FACTOR
     from pT_calibration_reader import pTCalReader as calibrationReader
 except ImportError:
     print >> sys.stderr, "Failed to import analysis_utilities."
@@ -185,8 +185,7 @@ if args.BScal:
     dfMC['wBeamSpot'] = getBeamSpotCorrectionWeights(dfMC, paramBeamSpotCorr, ref='bs')
 
 loc = dataLoc+'calibration/triggerScaleFactors/'
-# fTriggerSF = rt.TFile.Open(loc + 'HLT_' + cat.trg + '_SF_v39_BS_count.root', 'READ')
-fTriggerSF = rt.TFile.Open(loc + 'HLT_' + cat.trg + '_SF_v49.root', 'READ')
+fTriggerSF = rt.TFile.Open(loc + 'HLT_%s_SF_%s.root' % (cat.trg, TRIGGER_SCALE_FACTOR), 'READ')
 hTriggerSF = fTriggerSF.Get('hSF_HLT_' + cat.trg)
 
 ptmax = hTriggerSF.GetXaxis().GetXmax() - 0.01
@@ -335,7 +334,7 @@ makePlot('N_vtx', binning=[70, 0.5, 70.5], wMC=[dfMC['w']],
 makePlot('PV_chi2', binning=[100, 0, 200], wMC=[dfMC['w']], axis_title=['PV_chi2', 'Normalized entries'], saveFig='PV_chi2_'+cat.name+'.png')
 makePlot('PV_ndof', binning=[100, 0, 200], wMC=[dfMC['w']], axis_title=['PV_ndof', 'Normalized entries'], saveFig='PV_ndof_'+cat.name+'.png')
 dfMC['PV_pval'] = 1-scipy_chi2.cdf(dfMC['PV_chi2'],dfMC['PV_ndof'])
-dfRD['PV_pval'] = 1-scipy_chi2.cdf(dfMC['PV_chi2'],dfMC['PV_ndof'])
+dfRD['PV_pval'] = 1-scipy_chi2.cdf(dfRD['PV_chi2'],dfRD['PV_ndof'])
 makePlot('PV_pval', binning=[100, 0, 1], wMC=[dfMC['w']], axis_title=['PV_pval', 'Normalized entries'], saveFig='PV_pval_'+cat.name+'.png')
 
 if cat.name == "Low":
