@@ -31,10 +31,6 @@ except ImportError:
     print >> sys.stderr, "Did you remember to source the env.sh file in the repo?"
     sys.exit(1)
 
-if os.environ['CMSSW_VERSION'] != 'CMSSW_10_2_3':
-    print_warning("Must be running CMSSW version 10.2.3!")
-    sys.exit(1)
-
 import CMS_lumi, tdrstyle
 tdrstyle.setTDRStyle()
 CMS_lumi.writeExtraText = 1
