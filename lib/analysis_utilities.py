@@ -16,6 +16,7 @@ ops = {'>': operator.gt, '<': operator.lt, }
 # Latest ntuple tag. This tag contains a fix for the impact parameter uncertianty on MC
 NTUPLE_TAG = 'beamspot-constraint'
 TRIGGER_SCALE_FACTOR = 'beamspot-constraint'
+BD_CALIBRATION = 'beamspot-constraint'
 
 class bcolors:
     HEADER = '\033[95m'

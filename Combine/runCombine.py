@@ -34,7 +34,7 @@ from os.path import join, dirname
 
 try:
     from categoriesDef import categories as categoriesDef
-    from analysis_utilities import drawOnCMSCanvas, getEff, DSetLoader, str2bool, load_data, NTUPLE_TAG, load_yaml, print_warning, TRIGGER_SCALE_FACTOR
+    from analysis_utilities import drawOnCMSCanvas, getEff, DSetLoader, str2bool, load_data, NTUPLE_TAG, load_yaml, print_warning, TRIGGER_SCALE_FACTOR, BD_CALIBRATION
     from beamSpot_calibration import getBeamSpotCorrectionWeights
     from pT_calibration_reader import pTCalReader as kinCalReader
     from histo_utilities import create_TH1D, create_TH2D, std_color_list, make_ratio_plot
@@ -964,22 +964,13 @@ def createHistograms(category, args):
         return muonSF, up, down
 
     # Kinematic calibration of Bd
-    auxTag = 'v5_220601_base'
-    # auxTag += '_eta1p5'
-    # if args.cut_mu_ps:
-    #     auxTag = '_eta0p8'
-    # if args.beamspot_calibration:
-    #     auxTag += '_BScal'
-    # else:
-    #     auxTag += '_noBScal'
-
     if args.cal_b_pt:
-        cal_pT_Bd = kinCalReader(calibration_file=dataDir+'/calibration/kinematicCalibration_Bd/pt_polyCoeff_'+category.name+'_'+auxTag+'.pkl')
+        cal_pT_Bd = kinCalReader(calibration_file=dataDir+'/calibration/kinematicCalibration_Bd/pt_polyCoeff_%s_%s.pkl' % (category.name, BD_CALIBRATION))
     else:
         print 'Not using any B pT calibration'
 
-    cal_eta_B = kinCalReader(calibration_file=dataDir+'/calibration/kinematicCalibration_Bd/eta_polyCoeff_'+category.name+'_'+auxTag+'.pkl')
-    cal_addTK_pt = kinCalReader(calibration_file=dataDir+'/calibration/kinematicCalibration_Bd/addTk_pt_polyCoeff_'+category.name+'_'+auxTag+'.pkl')
+    cal_eta_B = kinCalReader(calibration_file=dataDir+'/calibration/kinematicCalibration_Bd/eta_polyCoeff_%s_%s.pkl' % (category.name, BD_CALIBRATION))
+    cal_addTK_pt = kinCalReader(calibration_file=dataDir+'/calibration/kinematicCalibration_Bd/addTk_pt_polyCoeff_%s_%s.pkl' % (category.name, BD_CALIBRATION))
 
     def computeKinCalWeights(ds, var, tag, kinCal):
         if kinCal.kind == 'poly':
