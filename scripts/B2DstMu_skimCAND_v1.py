@@ -1058,13 +1058,18 @@ def makeSelection(inputs):
             N_accepted_cand.append(N_acc)
 
     output = output[:N_accepted_tot]
+
     if not serial:
         print tag, ': done'
+
     ds = pd.DataFrame(output,columns=leafs_names)
+
     for name in leafs_names:
         if ds[name].dtype == np.float64:
             ds[name] = ds[name].astype(np.float32)
+
     ds['N_accepted_cand'] = np.array(N_accepted_cand)
+
     return ds
 
 def create_dSet(n, filepath, cat, skim_tag, parallel_type, applyCorrections=False, skipCut=[], trkControlRegion=False, max_events=1e15):
@@ -1390,6 +1395,7 @@ def create_dSet(n, filepath, cat, skim_tag, parallel_type, applyCorrections=Fals
                 dset = None
                 for ii in range(len(inputs)):
                     pb.show(ii)
+
                     ds = pd.read_hdf(join(tmpDir,'output_%i.hdf5' % ii),"events")
 
                     N_accepted_cand += list(ds['N_accepted_cand'])
