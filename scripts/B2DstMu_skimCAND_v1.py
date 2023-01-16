@@ -1060,7 +1060,12 @@ def makeSelection(inputs):
     output = output[:N_accepted_tot]
     if not serial:
         print tag, ': done'
-    return [output, N_accepted_cand]
+    ds = pd.DataFrame(output,columns=leafs_names)
+    for name in leafs_names:
+        if ds[name].dtype == np.float64:
+            ds[name] = ds[name].astype(np.float32)
+    ds['N_accepted_cand'] = np.array(N_accepted_cand)
+    return ds
 
 def create_dSet(n, filepath, cat, skim_tag, parallel_type, applyCorrections=False, skipCut=[], trkControlRegion=False, max_events=1e15):
     if cat is None:
@@ -1320,10 +1325,8 @@ def create_dSet(n, filepath, cat, skim_tag, parallel_type, applyCorrections=Fals
             # only set up to do that with jobs submitted via condor, so unless
             # you are running in a VM you shouldn't set parallel_type to serial
             # or jobs.
-            output, N_accepted_cand = makeSelection([n, '', filenames,
-leafs_names, cat,
-                                                     [0, N_cand_in-1], applyCorr, skipCut, trkControlRegion, True])
-            dset = pd.DataFrame(output, columns=leafs_names)
+            dset = makeSelection([n, '', filenames, leafs_names, cat, [0, N_cand_in-1], applyCorr, skipCut, trkControlRegion, True])
+            N_accepted_cand = list(dset['N_accepted_cand'])
         else:
             pdiv = list(range(0, N_cand_in, N_evts_per_job))
             if not pdiv[-1] == N_cand_in:
@@ -1338,8 +1341,7 @@ leafs_names, cat,
             if parallel_type == 'pool':
                 p = Pool(min(15,len(inputs)))
                 outputs = p.map(makeSelection, inputs)
-                output = np.concatenate(tuple([o[0] for o in outputs]))
-                dset = pd.DataFrame(output, columns=leafs_names)
+                dset = pd.concat(tuple(outputs))
             elif parallel_type == 'jobs':
                 tmpDir = 'tmp/B2DstMu_skimCAND_%s_%s' % (n,catName)
                 if trkControlRegion:
@@ -1388,22 +1390,17 @@ leafs_names, cat,
                 dset = None
                 for ii in range(len(inputs)):
                     pb.show(ii)
-                    with open(join(tmpDir,'output_%i.p' % ii), 'rb') as f:
-                        o = pickle.load(f)
+                    ds = pd.read_hdf(join(tmpDir,'output_%i.hdf5' % ii),"events")
 
-                        N_accepted_cand += o[1]
+                    N_accepted_cand += list(ds['N_accepted_cand'])
 
-                        ds = pd.DataFrame(o[0], columns=leafs_names)
-                        for name in leafs_names:
-                            if ds[name].dtype == np.float64:
-                                ds[name] = ds[name].astype(np.float32)
-                        if dset is None:
-                            dset = ds
-                        else:
-                            dset = pd.concat((dset,ds))
+                    if dset is None:
+                        dset = ds
+                    else:
+                        dset = pd.concat((dset,ds))
 
-                        # Try to free up as much memory as possible
-                        gc.collect()
+                    # Try to free up as much memory as possible
+                    gc.collect()
 
                 print 'Deleting temporary files...',
                 os.system('rm -rf ' + tmpDir + '/out')
@@ -1521,8 +1518,7 @@ serial or jobs."""
         with open(join(args.tmp_dir,'input_%i.p' % args.job_number), 'rb') as f:
             input = pickle.load(f)
         output = makeSelection(input)
-        with open(join(args.tmp_dir,'output_%i.p' % args.job_number), 'wb') as f:
-            pickle.dump(output, f)
+        output.to_hdf(join(args.tmp_dir,'output_%i.hdf5' % args.job_number), "events")
         sys.exit(0)
 
     file_loc = {}
