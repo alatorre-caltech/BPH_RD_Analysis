@@ -56,7 +56,7 @@ CMS_lumi.writeExtraText = 1
 CMS_lumi.extraText = "     Preliminary"
 donotdelete = []
 
-TRIGGER_SCALE_FACTOR = 'beamspot-constraint-test'
+TRIGGER_SCALE_FACTOR = 'beamspot-constraint'
 data_over_MC_overallNorm = 0.83
 
 # The tuples have the following columns:
