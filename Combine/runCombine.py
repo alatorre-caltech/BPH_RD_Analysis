@@ -218,7 +218,7 @@ def histogram_ctrl(ds, name, bins, weightsCentral, wVar, sel, ctrlVar, ctrlVar_m
 
             region = k[5:7]
 
-            if name_wVar.startswith('PV_') and var in PV_QUANTITIES:
+            if 'data' not in name and name_wVar.startswith('PV_') and var in PV_QUANTITIES:
                 var += name_wVar[2:]
 
             auxSel = sel[region]
@@ -281,7 +281,7 @@ def histogram(ds, name, bins, bins_2D, weightsCentral, wVar, observables_q2bins,
             else:
                 varName = var
 
-            if name_wVar.startswith('PV_') and var in PV_QUANTITIES:
+            if 'data' not in name and name_wVar.startswith('PV_') and var in PV_QUANTITIES:
                 varName += name_wVar[2:]
 
             histo[var][h_name] = create_TH1D(ds[varName], name=h_name, weights=w, scale_histo=scale, binning=bins[var], opt='underflow,overflow')
@@ -306,7 +306,7 @@ def histogram(ds, name, bins, bins_2D, weightsCentral, wVar, observables_q2bins,
                 scale = nTotExp/nTotSelected
 
                 varName = var
-                if name_wVar.startswith('PV_') and var in PV_QUANTITIES:
+                if 'data' not in name and name_wVar.startswith('PV_') and var in PV_QUANTITIES:
                     varName += name_wVar[2:] 
                     q2 = 'q2%s' % name_wVar[2:]
                 else:
@@ -317,7 +317,7 @@ def histogram(ds, name, bins, bins_2D, weightsCentral, wVar, observables_q2bins,
 
                 histo[cat_name][h_name] = create_TH1D(ds[varName][sel_q2], name=h_name, title=h_name, binning=bins[var][i_q2], opt='underflow,overflow', weights=w[sel_q2], scale_histo=scale)
                 if var == 'M2_miss':
-                    if name_wVar.startswith('PV_'):
+                    if 'data' not in name and name_wVar.startswith('PV_'):
                         auxS = np.column_stack((ds['M2_miss%s' % name_wVar[2:]][sel_q2], ds['Est_mu%s' % name_wVar[2:]][sel_q2]))
                     else:
                         auxS = np.column_stack((ds['M2_miss'][sel_q2], ds['Est_mu'][sel_q2]))
