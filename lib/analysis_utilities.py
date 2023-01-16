@@ -9,6 +9,7 @@ import os
 from os.path import join, expanduser, exists, abspath
 import pickle
 import sys
+import time
 
 import operator
 ops = {'>': operator.gt, '<': operator.lt, }
@@ -199,6 +200,35 @@ def getEff(k,N):
     de = np.sqrt(e*(1-e)/N)
     return [e, de]
 
+class FileLock:
+    def __init__(self, filename):
+        self.filename = filename
+        self.fd = None
+        self.pid = os.getpid()
+
+    def acquire(self):
+        try:
+            self.fd = os.open(self.filename, os.O_CREAT|os.O_EXCL|os.O_RDWR)
+            # Only needed to let readers know who's locked the file
+            os.write(self.fd, "%d" % self.pid)
+            return 1    # return ints so this can be used in older Pythons
+        except OSError:
+            self.fd = None
+            return 0
+
+    def release(self):
+        if not self.fd:
+            return 0
+        try:
+            os.close(self.fd)
+            os.remove(self.filename)
+            return 1
+        except OSError:
+            return 0
+
+    def __del__(self):
+        self.release()
+
 def load_data(filename,stop=None,branches=None,cache_path='/storage/af/group/rdst_analysis',verbose=False):
     """
     Returns a pandas dataframe of the skimmed data in `filename`. Caches the
@@ -212,25 +242,37 @@ def load_data(filename,stop=None,branches=None,cache_path='/storage/af/group/rds
     sha1 = hashlib.sha1(aux).hexdigest()
     key = "%s.hdf5" % sha1
     filepath = join(cache_path,".cache","combine",key)
+    lockpath = join(cache_path,".cache","combine",key + ".lock")
     dirname = os.path.dirname(filepath)
     if not exists(dirname):
         os.makedirs(dirname)
-    if exists(filepath):
-        try:
+    lock = FileLock(lockpath)
+    nwait = 0
+    while True:
+        if nwait > 100:
+            raise Exception("waited too long for %s" % filepath)
+        if lock.acquire():
+            # got it
+            if exists(filepath):
+                try:
+                    if verbose:
+                        print 'Loading from cache', filename
+                    return pd.read_hdf(filepath,'df')
+                except EOFError:
+                    pass
+            ds = pd.DataFrame(rtnp.root2array(filename,stop=stop,branches=branches))
+            reType = {}
+            for colName in ds.columns:
+                reType[colName] = np.float32
+            ds = ds.astype(reType)
             if verbose:
-                print 'Loading from cache', filename
-            return pd.read_hdf(filepath,'df')
-        except EOFError:
-            pass
-    ds = pd.DataFrame(rtnp.root2array(filename,stop=stop,branches=branches))
-    reType = {}
-    for colName in ds.columns:
-        reType[colName] = np.float32
-    ds = ds.astype(reType)
-    if verbose:
-        print 'Dumping', filename, 'as', filepath
-    ds.to_hdf(filepath,'df',mode='w')
-    return ds
+                print 'Dumping', filename, 'as', filepath
+            ds.to_hdf(filepath,'df',mode='w')
+            return ds
+        else:
+            print("failed to acquire lock for %s. Waiting 10 seconds..." % filepath)
+            time.sleep(10)
+            nwait += 1
 
 class DSetLoader(object):
     def __init__(self, in_sample,
