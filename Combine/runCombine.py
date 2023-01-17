@@ -4345,7 +4345,7 @@ def submitRunToCondor(args):
     arguments += ' '.join(sys.argv).replace(' --submit', ' --run-in-job')
 
     environment = '"BPH_RD_ANALYSIS=%s"' % os.path.join(os.environ['HOME'],'RDstAnalysis/BPH_RD_Analysis')
-    mem = 10000
+    mem = 20000
     cpus = np.ceil(float(mem)/4000)
 
     if 'fitDiag' in args.step or args.category == 'comb':
