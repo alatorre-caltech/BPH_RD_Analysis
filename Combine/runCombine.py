@@ -1119,6 +1119,7 @@ def createHistograms(category, args):
     binning['PV_pval'] = array('d', list({'Low': np.arange(0, 1, 0.01), 'Mid': np.arange(0, 1, 0.01), 'High': np.arange(0, 1, 0.01)}[category.name]))
     binning['pval_piK'] = array('d', list({'Low': np.arange(0, 1, 0.01), 'Mid': np.arange(0, 1, 0.01), 'High': np.arange(0, 1, 0.01)}[category.name]))
     binning['pval_D0pis'] = array('d', list({'Low': np.arange(0, 1, 0.01), 'Mid': np.arange(0, 1, 0.01), 'High': np.arange(0, 1, 0.01)}[category.name]))
+    binning['pval_D0pismu'] = array('d', list({'Low': np.arange(0, 1, 0.01), 'Mid': np.arange(0, 1, 0.01), 'High': np.arange(0, 1, 0.01)}[category.name]))
     binning['mu_pt'] = array('d',
                         {'Low': list(np.arange(7.2, 9.201, 0.05)),
                         'Mid': list(np.arange(9.2, 12.201, 0.05)),
@@ -2074,6 +2075,16 @@ def drawPlots(tag, hDic, catName, args, scale_dic=None):
                                    addText='Cat. '+catName, logy=False, legBkg=True,
                                    min_y=1, tag=tag+'pval_D0pis', legLoc=[0.65, 0.4, 0.9, 0.75])
         cAux.SaveAs(webFolder+'/pval_D0pis_'+tag+'.png')
+        outCanvas.append(cAux)
+
+    if 'pval_D0pismu' in hDic.keys():
+        print 'Drawing pval_D0pismu'
+        hDic['pval_D0pismu']['data'].GetXaxis().SetTitle('D0pismu p-value')
+        hDic['pval_D0pismu']['data'].GetYaxis().SetTitle('Events')
+        cAux = plot_SingleCategory(CMS_lumi, hDic['pval_D0pismu'], draw_pulls=True, pullsRatio=True, scale_dic=scale_dic,
+                                   addText='Cat. '+catName, logy=False, legBkg=True,
+                                   min_y=1, tag=tag+'pval_D0pismu', legLoc=[0.65, 0.4, 0.9, 0.75])
+        cAux.SaveAs(webFolder+'/pval_D0pismu_'+tag+'.png')
         outCanvas.append(cAux)
 
     if 'B_pt' in hDic.keys():
