@@ -49,7 +49,7 @@ mB_var = 'mass_candB'
 
 # Clean sets
 CUTS = [
-    ['trgMu_eta', [-0.8, 0.8]],
+    ['trgMu_eta', [-1.5, 1.5]],
     ['pi_lostInnerHits', [-2, 1]],
     ['K_lostInnerHits', [-2, 1]],
     ['mup_lostInnerHits', [-2, 1]],
