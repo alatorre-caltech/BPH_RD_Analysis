@@ -4384,7 +4384,7 @@ if __name__ == "__main__":
     parser.add_argument('--skim-tag-rd', default=None, type=str, help='Tag to append to the skimmed directory for data.')
     parser.add_argument('--bare-mc', action='store_true', help='Use bare MC instead of the corrected one.')
     parser.add_argument('--max-events', default=None, type=int, help='Max number of MC events to load per sample.')
-    parser.add_argument('--cal-b-pt', action='store_true', help='include B pt corrections')
+    parser.add_argument('--cal-b-pt', default=True, action='store_true', help='include B pt corrections')
     parser.add_argument('--ff-scheme', default='CLN', choices=['CLN', 'BLPR', 'NoFF'], help='Form factor scheme to use.')
     parser.add_argument('--lumi-mult', default=1., type=float, help='Luminosity multiplier for asimov dataset. Only works when running with --asimov.')
     parser.add_argument('--beamspot-calibration', action='store_true', help='Apply beam spot calibration.')
