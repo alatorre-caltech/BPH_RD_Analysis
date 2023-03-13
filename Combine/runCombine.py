@@ -2826,20 +2826,6 @@ def createSingleCard(histo, category, args, fitRegionsOnly=False):
     if val in aux:
         card += 'normDataSS'+category.trg+' lnN' + aux*nCat + '\n'
 
-    #### Tracking efficiency uncertainty
-    uncVal = 1.05
-    card += 'ctrlNormSF_'+category.name+' lnN'
-    for c in categories:
-        val = ''
-        if re.match('ctrl_[pm]__', c):
-            val = ' {:.3}'.format(uncVal)
-        elif re.match('ctrl_[pm]{2}_', c):
-            val = ' {:.3}'.format(uncVal**2)
-        else:
-            val = ' -'
-        card += val*len(processes)
-    card += '\n'
-
     #### Branching ratio uncertainty
     brPklLoc = '/storage/af/group/rdst_analysis/BPhysics/data/forcedDecayChannelsFactors_v2.pickle'
     with open(brPklLoc, 'rb') as f:
