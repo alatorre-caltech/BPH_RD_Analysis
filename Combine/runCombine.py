@@ -4342,6 +4342,7 @@ def submitRunToCondor(args):
         number = int(root.split("_")[1])
         jN = max(jN, number+1)
 
+    arguments = os.environ['HOME'] + ' '
     arguments = os.environ['PWD'] + ' '
     arguments += ' '.join(sys.argv).replace(' --submit', ' --run-in-job')
 

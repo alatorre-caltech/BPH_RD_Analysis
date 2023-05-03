@@ -1,8 +1,10 @@
 #!/bin/bash
-directory=$1
-command="${@:2}"
+home=$1
+directory=$2
+command="${@:3}"
 
-cd /storage/af/user/ocerri/work/CMSSW_10_2_13/src/
+export HOME=$home
+cd $home/CMSSW_10_2_13/src/
 source /cvmfs/cms.cern.ch/cmsset_default.sh
 eval `scramv1 runtime -sh`
 echo "cd $directory"
