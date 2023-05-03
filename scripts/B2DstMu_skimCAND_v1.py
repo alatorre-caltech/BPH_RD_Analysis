@@ -19,7 +19,7 @@ import sys, os, pickle, time, re
 from glob import glob
 from multiprocessing import Pool
 import commands
-from os.path import join
+from os.path import join, expanduser
 import numpy as np
 import pandas as pd
 
@@ -72,9 +72,10 @@ MC_samples = ['Bd_MuNuDst',
               # Others
               # 'DstKu_KuToMu',
               # 'Mu_Enriched'
+              'Bu_D2stDs'
               ]
 
-sampleFile = '/storage/af/user/ocerri/work/CMSSW_10_2_3/src/ntuplizer/BPH_RDntuplizer/production/samples.yml'
+sampleFile = join(expanduser('~'),'RDstAnalysis/CMSSW_10_2_3/src/ntuplizer/BPH_RDntuplizer/production/samples.yml')
 samples = load_yaml(sampleFile)['samples']
 for s in MC_samples:
     filesLocMap[s] = join(MCloc, samples[s]['dataset'], MCend)
@@ -1450,6 +1451,7 @@ def createSubmissionFile(tmpDir, njobs):
         fjob.write('cd %s/RDstAnalysis/BPH_RD_Analysis/\n' % os.environ['HOME'])
         fjob.write('export PYTHONPATH=%s/RDstAnalysis/BPH_RD_Analysis/lib:$PYTHONPATH\n' % os.environ['HOME'])
         fjob.write('export PYTHONPATH=%s/RDstAnalysis/BPH_RD_Analysis/analysis:$PYTHONPATH\n' % os.environ['HOME'])
+        fjob.write('export HOME=%s\n' % os.environ['HOME'])
         fjob.write('source env.sh\n')
         fjob.write('python ./scripts/B2DstMu_skimCAND_v1.py --make-sel --tmp-dir $1 -j $2\n')
     os.system('chmod +x %s/job.sh' % tmpDir)
