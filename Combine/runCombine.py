@@ -94,6 +94,7 @@ processOrder = [
     'Bd_DDs1', 'Bu_DDs1',
     #'B_DstDXX',
     'dataSS_DstMu'
+    'Bu_D2stDs'
 ]
 
 samples_Bd = [p  for p in processOrder if (p[:2] == 'Bd' or p in ['tau', 'mu'])]
