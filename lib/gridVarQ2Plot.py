@@ -8,7 +8,7 @@ rt.RooMsgService.instance().setGlobalKillBelow(rt.RooFit.ERROR)
 import tdrstyle
 tdrstyle.setTDRStyle()
 
-col_dic = {'mu': rt.kAzure+1, 'tau': rt.kRed-4, 'DstHc':rt.kGreen+1, 'BuDstst': rt.kOrange-3, 'BdDstst': rt.kViolet-7, 'BsDstst':rt.kYellow-7, 'TauDstst':rt.kMagenta-9, 'JpsiKst':rt.kYellow-7, 'dataSS_DstMu': rt.kGray+1, 'B_DstDXX': rt.kRed-8}
+col_dic = {'mu': rt.kAzure+1, 'tau': rt.kRed-4, 'DstHc':rt.kGreen+1, 'BuDstst': rt.kOrange-3, 'BdDstst': rt.kViolet-7, 'BsDstst':rt.kYellow-7, 'TauDstst':rt.kMagenta-9, 'JpsiKst':rt.kYellow-7, 'dataSS_DstMu': rt.kGray+1, 'B_DstDXX': rt.kRed-8, 'Bu_D2stDs': rt.kGreen+2}
 
 label_dic = {'data' : 'Data',
              'mu'   : 'B#rightarrow D*#mu#nu',
@@ -21,6 +21,7 @@ label_dic = {'data' : 'Data',
              'TauDstst': 'B_{(s)}#rightarrow D_{(s)}**#tau#nu',
              'dataSS_DstMu' : 'SS D*#mu (data)',
              'JpsiKst': 'B#rightarrow J/#PsiK*',
+             'Bu_D2stDs': 'B+#rightarrow D**D_{s}',
             }
 
 fillStyleVar = [1, 3345, 3354, 1, 1, 1, 1, 1, 1]

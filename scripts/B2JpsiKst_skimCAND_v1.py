@@ -46,7 +46,8 @@ MCend = '/ntuples_Bd2JpsiKst_%s/out_CAND_*.root' % NTUPLE_TAG
 RDloc = '/storage/af/group/rdst_analysis/BPhysics/data/cmsRD/ParkingBPH*/'
 
 filesLocMap = {
-'MC'    : MCloc+'CP_General_BdToJpsiKstar_BMuonFilter_SoftQCDnonD_TuneCP5_13TeV-pythia8-evtgen'+MCend,
+#'MC'    : MCloc+'CP_General_BdToJpsiKstar_BMuonFilter_SoftQCDnonD_TuneCP5_13TeV-pythia8-evtgen'+MCend,
+'MC'    : MCloc+'BParking_Bd_JpsiKst_SoftQCDnonD_scale5_TuneCP5_HELAMP_PUc2_10-2-3'+MCend,
 'data'  : RDloc+'Run2018D-05May2019promptD-v1_RDntuplizer_Bd2JpsiKst_%s/out_CAND*.root' % NTUPLE_TAG,
 }
 
