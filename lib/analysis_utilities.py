@@ -280,7 +280,7 @@ class DSetLoader(object):
                  candLoc='/storage/af/group/rdst_analysis/BPhysics/data/cmsMC/',
                  candDir='ntuples_B2DstMu',
                  # site_loc_conf = '/storage/cms/store/user/ocerri/',
-                 sampleFile = join(expanduser("~","RDstAnalysis/CMSSW_10_2_3/src/ntuplizer/BPH_RDntuplizer/production/samples.yml")),
+                 sampleFile = join(expanduser("~"),"RDstAnalysis/CMSSW_10_2_3/src/ntuplizer/BPH_RDntuplizer/production/samples.yml"),
                  skim_tag = '',
                  loadSkim=None
                  ):

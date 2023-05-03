@@ -88,6 +88,7 @@ inDic['Bs_DstDs'] = DSetLoader('Bs_DstDs', candDir=candDir)
 inDic['Bd_DDs1'] = DSetLoader('Bd_DDs1', candDir=candDir)
 inDic['Bu_DDs1'] = DSetLoader('Bu_DDs1', candDir=candDir)
 inDic['B_DstDXX'] = DSetLoader('B_DstDXX', candDir=candDir)
+inDic['Bu_D2stDs'] = DSetLoader('Bu_D2stDs', candDir=candDir)
 
 ######## Others background
 # inDic['DstKu_KuToMu'] = DSetLoader('DstKu_KuToMu', candDir='ntuples_B2DstMu_211118')
