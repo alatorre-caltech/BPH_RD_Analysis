@@ -574,6 +574,7 @@ def loadDatasets(category, loadRD, args):
     'Bd_DDs1':  DSetLoader('Bd_DDs1', candDir=candDir, skim_tag=args.skim_tag),
     'Bu_DDs1':  DSetLoader('Bu_DDs1', candDir=candDir, skim_tag=args.skim_tag),
     #'B_DstDXX': DSetLoader('B_DstDXX', candDir=candDir, skim_tag=args.skim_tag),
+    'Bu_D2stDs': DSetLoader('Bu_D2stDs', candDir=candDir, skim_tag=args.skim_tag),
     }
 
     dSet = {}
@@ -2861,6 +2862,8 @@ def createSingleCard(histo, category, args, fitRegionsOnly=False):
     card += brScaleSys('Bd_DDs1Br', ['Bd_DDs1'], relUnc=1.)
     card += brScaleSys('Bu_DDs1Br', ['Bu_DDs1'], relUnc=1.)
     #card += brScaleSys('B_DstDXXBr', ['B_DstDXX'], relUnc=1.)
+    # FIXME: adding 100% uncertainty here, but I don't think this is necessary
+    card += brScaleSys('B_D2stDs', ['Bu_D2stDs'], relUnc=1.)
 
     card += 60*'-'+'\n'
 
