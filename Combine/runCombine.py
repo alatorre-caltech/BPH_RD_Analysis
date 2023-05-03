@@ -4343,7 +4343,7 @@ def submitRunToCondor(args):
         jN = max(jN, number+1)
 
     arguments = os.environ['HOME'] + ' '
-    arguments = os.environ['PWD'] + ' '
+    arguments += os.environ['PWD'] + ' '
     arguments += ' '.join(sys.argv).replace(' --submit', ' --run-in-job')
 
     environment = '"BPH_RD_ANALYSIS=%s"' % os.path.join(os.environ['HOME'],'RDstAnalysis/BPH_RD_Analysis')
